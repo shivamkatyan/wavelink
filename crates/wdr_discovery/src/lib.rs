@@ -26,6 +26,8 @@ use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 
 use wdr_fakes::adapters::{AdapterError, Discovery, FakeDiscoveryPeer};
 
+pub mod manual;
+
 /// The advertised service type (`_wdr._tcp.local.` — ADR-006, bound in
 /// `wdr_proto`'s TXT-record cap for privacy-minimized advertisement; the
 /// `.local.` multicast-DNS suffix is required by `mdns-sd`).
