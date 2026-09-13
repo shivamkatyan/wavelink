@@ -36,7 +36,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
+          # No cache: pip here — the repo has no requirements.txt/pyproject.toml,
+          # and scripts/site/build.sh installs its only dep (markdown, pure-Python)
+          # itself; pip cache would make setup-python fail step 2 (no dep file).
 
       - name: Build static site
         run: bash scripts/site/build.sh
