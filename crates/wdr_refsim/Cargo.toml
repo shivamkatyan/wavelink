@@ -1,0 +1,50 @@
+# WDR reference simulator (B1, task R-B1-SIM / t-B1-receiver).
+#
+# Both halves of the reference simulator live here and are owned by this task:
+#
+#   * `ref_receiver` — a headless CLI that receives WDR audio frames over the
+#     `wdr_transport` loopback/QUIC plane, runs them through the bounded
+#     in-order jitter buffer, decodes via `wdr_codec`, feeds the canonical
+#     `wdr_fakes` HashSink + a light NullRenderSink, and publishes
+#     `receiver-sim.json` metrics (the compose harness contract in
+#     docker/assert.sh).
+#   * `ref_emitter` — the emitter half: produces a `wdr_fakes` fixture, encodes
+#     via `wdr_codec` (lossy Opus on QUIC datagrams, lossless FLAC/PCM on a
+#     reliable stream per ADR-003), gates lossless on the effective
+#     `wdr_entitlement` policy (Free tier never sends lossless), and publishes
+#     `emitter-sim.json` metrics.
+#
+# This crate re-exports the shared fixtures/hash helpers so both halves stay in
+# step with the canonical goldens (wdr_fakes / t-B0-fakes.md).
+#
+# Dependency policy (docs/planning/DEPENDENCY_EVALUATION.md): serde/JSON,
+# blake3, quinn, tokio, rcgen and the B0 crates are all already in the locked
+# graph; nothing new is introduced beyond `serde_json` (the metrics contract)
+# and `rand` (seeded impairment/Prng fixture, pinned to the locked rand 0.10).
+# libopus/libFLAC come in via `wdr_codec` (vendored, permissive). `rcgen` is a
+# regular dependency because both CLI bins need the loopback self-signed
+# identity at `cargo run` time (tests use it too).
+
+[package]
+name = "wdr_refsim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "WDR B1 reference simulator: headless emitter + receiver pipeline (jitter buffer, decode, HashSink/NullRenderSink) with e2e loopback tests (R-B1-SIM)."
+
+[dependencies]
+quinn = { version = "0.11.11", default-features = true }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync", "fs", "signal"] }
+bytes = "1.12.1"
+blake3 = { version = "1.8.5", default-features = false }
+serde = { version = "1.0.229", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+rand = { version = "0.10.2", default-features = false, features = ["std_rng", "std"] }
+rcgen = "0.14.0"
+
+wdr_proto = { path = "../wdr_proto" }
+wdr_codec = { path = "../wdr_codec" }
+wdr_fakes = { path = "../wdr_fakes" }
+wdr_entitlement = { path = "../wdr_entitlement" }
+wdr_transport = { path = "../wdr_transport" }

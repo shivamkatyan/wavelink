@@ -1,0 +1,22 @@
+# Dev images need only source; keep build timestamps small and secrets out.
+dev/*
+target/
+.git/
+.gitignore
+**/*.rs.bk
+node_modules/
+.gradle/
+build/
+*.apk
+*.aab
+DerivedData/
+*.dSYM/
+xcuserdata/
+.env
+*.p12
+*.pfx
+*.jks
+*.keystore
+docs/
+site_build/
+dist/

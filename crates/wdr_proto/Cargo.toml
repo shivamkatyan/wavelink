@@ -1,0 +1,13 @@
+[package]
+name = "wdr_proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Wavelink wire protocol: control messages, audio frame container, bounds, and codecs (B0)."
+
+[dependencies]
+postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
+serde = { version = "1.0.229", default-features = false, features = ["derive", "alloc"] }
+[dev-dependencies]
+proptest = { version = "1.11.0", default-features = false, features = ["std"] }

@@ -1,0 +1,9 @@
+[package]
+name = "wdr_session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "WDR session state machine: pairing/negotiation/streaming/recovering lifecycle with clock-injected transitions, backoff and idle expiry. Zero external dependencies."
+
+[dependencies]

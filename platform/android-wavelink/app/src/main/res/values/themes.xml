@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Light theme: framework Material (no AppCompat/Material dependency). -->
+<resources>
+    <style name="WDRTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/wdr_background</item>
+        <item name="android:colorAccent">@color/wdr_accent</item>
+        <item name="android:statusBarColor">@color/wdr_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

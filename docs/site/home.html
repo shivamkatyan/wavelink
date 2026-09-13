@@ -1,0 +1,102 @@
+<section class="hero">
+  <span class="badge">Source-available · Free for personal use</span>
+  <h1>Turn your portable DAC into a wireless audio receiver.</h1>
+  <p class="lede">
+    Wavelink sends a computer's live audio over your local Wi-Fi to a phone, tablet, or
+    other device — where it plays through ordinary output or a connected USB&nbsp;DAC. Free lossy
+    mode for everyone; lossless Pro mode that is honestly measured, never assumed.
+  </p>
+  <div class="cta-row">
+    <a class="btn btn-primary" href="./docs/index.html">Read the docs</a>
+    <a class="btn btn-ghost" href="https://github.com/shivamkatyan/wavelink/releases" rel="noopener">Get builds</a>
+  </div>
+</section>
+
+<section class="section">
+  <h2>What you get</h2>
+  <p class="sub">Emitter apps capture audio; receiver apps render it — lossy or lossless depending on your tier.</p>
+  <div class="grid grid-3">
+    <div class="card">
+      <div class="ico">🎧</div>
+      <h3>Wi-Fi relay</h3>
+      <p>Direct, local, peer-to-peer. Lossy Opus (Free) or lossless FLAC/raw PCM with sample-perfect
+        integrity proven by hash tests (Pro).</p>
+    </div>
+    <div class="card">
+      <div class="ico">🔌</div>
+      <h3>USB DAC support</h3>
+      <p>Receivers detect and route to a portable USB DAC where the OS exposes it (Android
+        <code>TYPE_USB_DEVICE</code>, iOS <code>usbAudio</code>, macOS CoreAudio).</p>
+    </div>
+    <div class="card">
+      <div class="ico">🔒</div>
+      <h3>Private by default</h3>
+      <p>No cloud, no accounts, no telemetry. Authenticated, encrypted local streaming; redacted
+        diagnostics that never leak audio, secrets, or raw device identities.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <h2>Works on</h2>
+  <p class="sub">Emitter (capture) and Receiver (render) across platforms — with honest caveats.</p>
+  <div class="grid grid-5">
+    <div class="card plat">
+      <h4>macOS 13+</h4>
+      <p class="role">ScreenCaptureKit + Core Audio taps</p>
+      <span class="tag tag-ok">Emitter ✅</span>
+    </div>
+    <div class="card plat">
+      <h4>Windows 11</h4>
+      <p class="role">WASAPI loopback</p>
+      <span class="tag tag-ok">Emitter ✅</span>
+    </div>
+    <div class="card plat">
+      <h4>Linux</h4>
+      <p class="role">PipeWire / ALSA</p>
+      <span class="tag tag-ok">Emitter ✅ · Receiver ✅</span>
+    </div>
+    <div class="card plat">
+      <h4>Android 10+</h4>
+      <p class="role">Playback-capture + MediaProjection</p>
+      <span class="tag tag-ok">Emitter ✅</span>
+      <span class="tag tag-ok" style="display:inline-block;margin-top:4px">Receiver ✅</span>
+    </div>
+    <div class="card plat">
+      <h4>iOS 14+</h4>
+      <p class="role">AVAudioEngine / ReplayKit / SCK</p>
+      <span class="tag tag-ok">Receiver ✅</span>
+      <span class="tag tag-partial" style="display:inline-block;margin-top:4px">Emitter (limited)</span>
+    </div>
+  </div>
+  <p class="sub" style="margin-top:14px">
+    Bluetooth: the one supported receiver path is <strong>Linux A2DP-sink</strong> (BlueZ + PipeWire).
+    Stock phones cannot act as A2DP sinks through public APIs — the apps say so and offer the
+    free lossy Wi-Fi fallback. See <a href="./docs/bluetooth.html">Bluetooth</a>.
+  </p>
+</section>
+
+<section class="section">
+  <h2>How it works</h2>
+  <div class="steps">
+    <div class="step"><div><h3>Connect</h3><p>Plug a portable DAC into any receiver device.</p></div></div>
+    <div class="step"><div><h3>Pair</h3><p>Launch the receiver, become discoverable, and approve an authenticated pairing request from an emitter.</p></div></div>
+    <div class="step"><div><h3>Listen</h3><p>Play from the emitter; the receiver renders live audio to the DAC. Fidelity status is honest — “bit-perfect” only after hardware verification.</p></div></div>
+  </div>
+</section>
+
+<section class="section">
+  <h2>Now and next</h2>
+  <div class="honest">
+    <strong>Honest status:</strong> the reference system (headless emitter + receiver over QUIC) is
+    verified end-to-end — lossless hash-perfect under clean and 1% lossy networks, 60-minute clean
+    soak PASS, 215 tests. The app shells implement each platform's capture, output routing, policy,
+    consent, and status surfaces and are being wired to that proven transport via a <code>FrameSink</code>
+    seam. Hardware-only checks (real capture, USB-DAC hotplug, Bluetooth lab, bit-perfect loopback)
+    and store signing are pending external gates with runbooks — nothing here overclaims them.
+  </div>
+  <div class="cta-row">
+    <a class="btn btn-ghost" href="./docs/setup-and-install.html">Install &amp; setup</a>
+    <a class="btn btn-ghost" href="https://github.com/shivamkatyan/wavelink" rel="noopener">Source</a>
+  </div>
+</section>

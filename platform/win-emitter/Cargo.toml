@@ -1,0 +1,43 @@
+# win-emitter — standalone Windows WASAPI emitter crate (t-B2-win).
+#
+# This crate is standalone on PURPOSE: it is NOT a member of the root WDR
+# workspace (it embeds its own `[workspace]` so `cargo` treats it as its own
+# project root). It must not depend on any core crate so it stays tiny and
+# Linux-buildable for unit tests while the WASAPI code paths are fully
+# `#[cfg(windows)]`-gated and validated on a Windows runner (see build-check.md).
+[package]
+name = "win-emitter"
+version = "0.0.1"
+edition = "2021"
+license = "LicenseRef-Proprietary"
+rust-version = "1.98"
+description = "Wavelink — Windows WASAPI loopback emitter scaffold (platform shell)."
+
+[dependencies]
+
+# WASAPI bindings: ONLY sent to the Microsoft `windows` crate on Windows hosts.
+# `cargo check --target x86_64-pc-windows-msvc` on a Windows runner resolves
+# this; Linux builds simply omit it (cfg(windows) target gate). Pinned to the
+# 0.62.x series (see DEPENDENCY_EVALUATION.md windows-rs row + build-check.md).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Console",
+    "Win32_System_Variant",
+] }
+
+[dev-dependencies]
+
+[workspace]
+# Standalone project: `cargo` invoked from this directory treats this crate as
+# its own workspace root and ignores the parent WDR workspace when running
+# `cargo build/test/clippy/fmt` here. The parent WDR workspace excludes this
+# directory via its explicit `members = ["crates/*", ...]` list.
+
+[profile.release]
+lto = "thin"

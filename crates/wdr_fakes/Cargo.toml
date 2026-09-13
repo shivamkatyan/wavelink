@@ -1,0 +1,27 @@
+# WDR fakes crate — deterministic synthetic PCM sources, hash sink, null
+# devices and fake adapters standing in for platform touchpoints until the
+# native shells exist (ARCHITECTURE §Process/component boundaries — `fakes`).
+#
+# Dependency policy (docs/planning/DEPENDENCY_EVALUATION.md):
+#   - `blake3` is used for the lossless running hash (golden integrity).
+#     CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception, permissive —
+#     matches the locked-pin discipline below. `default-features = false`
+#     keeps the pure-Rust portable path (no rayon/mmap), so both feature-gated
+#     cargo fmt and CI are stable.
+#   - `rand` with `rand_chacha` is the seeded PRNG behind the deterministic
+#     fixtures: every generator is seeded via a 32-byte ChaCha12 key
+#     (rand 0.10's `StdRng`, which IS `ChaCha12Rng`), i.e. no thread-rng /
+#     OS entropy anywhere on the data path. Pinned exactly.
+[package]
+name = "wdr_fakes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "WDR DevEx fakes: deterministic PCM fixture generators, blake3 HashSink, null source/sink and fake adapters (CaptureSource/RenderSink/Clock/Discovery/PairingUi/PermissionGate/Storage/Entitlement). Library dev-dep for later codec/jitter/session/transport workers."
+
+[dependencies]
+blake3 = { version = "1.8.5", default-features = false }
+rand_chacha = { version = "0.9.0", default-features = false, features = ["std"] }
+
+[dev-dependencies]

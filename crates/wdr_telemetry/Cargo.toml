@@ -1,0 +1,19 @@
+# WDR telemetry crate — typed observability events (t-B0-obs).
+#
+# Implements ARCHITECTURE.md §Observability core/telemetry: `tracing`-friendly
+# stable event names, session-local correlation IDs, bounded in-memory ring,
+# redaction allow/deny (SECURITY_SPEC.md §5.2) and a redacted diagnostic
+# export with a machine-checkable manifest (SECURITY_SPEC.md §5.4).
+#
+# Dependency policy: deliberately zero runtime deps — `wdr_telemetry` uses
+# only `std`, so the export path cannot be a transitive supply-chain vector
+# and stays portable across embedded/headless build targets.
+[package]
+name = "wdr_telemetry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "WDR observability: stable typed telemetry events, session-local correlation IDs, bounded ring, redaction allow/deny, redacted diagnostic export with manifest."
+
+[dependencies]

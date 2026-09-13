@@ -1,0 +1,30 @@
+[package]
+name = "linux-emitter"
+version = "0.0.1"
+edition = "2021"
+license = "LicenseRef-Proprietary"
+rust-version = "1.98"
+description = "Wavelink — Linux PipeWire emitter scaffold (platform shell)."
+
+[dependencies]
+
+# PipeWire bindings: only compiled when the `pipewire` feature is enabled on a
+# Linux target that has the pipewire dev libraries / daemon available (see
+# build-check.md). Builds with `cargo check --features pipewire` on a PipeWire
+# CI runner or distro with pipewire-0.3 dev headers. The `pipewire` crate
+# version below is a documented target; bump per DEPENDENCY_EVALUATION.md.
+[features]
+default = []
+pipewire = ["dep:pipewire"]
+
+[dependencies.pipewire]
+version = "0.10"
+optional = true
+
+[workspace]
+# Standalone project: `cargo` invoked from this directory treats this crate as
+# its own workspace root and ignores the parent WDR workspace. The parent
+# workspace excludes platform/ via its explicit members list.
+
+[profile.release]
+lto = "thin"

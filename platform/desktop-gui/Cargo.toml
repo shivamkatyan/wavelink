@@ -1,0 +1,51 @@
+# platform/desktop-gui — Windows/Linux GUI scaffold (iced, single Rust codebase)
+#
+# Standalone workspace (like every platform/ shell). Cross-platform pure-Rust
+# desktop GUI driving the SAME proven transport seam
+# (`wdr_refsim::sink::QuicAudioSink` / `AudioFrameSink`) that the macOS app's
+# `--stream` uses.
+#
+# Feature split (honest staging):
+#   * default = driver only: the `StreamDriver` trait + `FixtureDriver` (real
+#     QUIC streaming from a deterministic fixture — hash-perfect, no capture),
+#     `CaptureOffline` (honest "capture not wired on win/linux yet" state), and
+#     a placeholder main. Verifiable on ANY host with `cargo check/test`.
+#   * `gui`  = iced window (status card, single Stop/Start, receiver address,
+#     metrics card, activity log, tier, dark/light) wiring the StreamDriver.
+#
+# Native Windows link + Linux windowing (libxkbcommon/wayland/etc.) need the
+# Windows/Linux runners — see build-check.md. `cargo check` on this macOS host
+# is the local authority for the driver; the `gui` feature on a runner is the
+# next gate.
+
+[package]
+name = "desktop-gui"
+version = "0.0.1"
+edition = "2021"
+license = "LicenseRef-Proprietary"
+rust-version = "1.98"
+description = "Wavelink — cross-platform (win/linux) desktop GUI scaffold (iced + the core transport seam)."
+
+[dependencies]
+wdr_refsim = { path = "../../crates/wdr_refsim" }
+wdr_proto = { path = "../../crates/wdr_proto" }
+wdr_fakes = { path = "../../crates/wdr_fakes" }
+wdr_entitlement = { path = "../../crates/wdr_entitlement" }
+
+[features]
+default = []
+# The iced window. Kept OFF the default so `cargo check` here (and on cross
+# targets without display/GPU libs) verifies the driver without pulling winit/
+# wgpu/tiny-skia. ON for the real desktop app on a native runner.
+gui = ["dep:iced"]
+
+[dependencies.iced]
+version = "0.13"
+optional = true
+default-features = false
+
+[workspace]
+# Standalone project: `cargo` from this dir treats this crate as its own root.
+
+[profile.release]
+lto = "thin"

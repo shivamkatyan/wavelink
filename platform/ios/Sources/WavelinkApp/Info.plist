@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Wavelink</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>dev.wavelink.app</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.1</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+
+	<!-- iOS floor is 14 (ADR-008); local-network TCC arrives with iOS 14. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>MinimumOSVersion</key>
+	<string>14.0</string>
+
+	<!-- Empty UILaunchScreen = a generated (non-letterboxed) launch screen on
+	     arbitrary-size displays once the app is wrapped in an Xcode project. -->
+	<key>UILaunchScreen</key>
+	<dict/>
+
+	<!-- PLATFORM_MATRIX iOS row: the SCK emitter declares `.audio` +
+	     `screen-capture` (and the self-session tap keeps running while
+	     backgrounded via `.audio`). Value set mirrors
+	     WDRiOSEmitterCore.AudioSessionPolicy.UIBackgroundModes.declared.
+	     HONESTY: capture never STARTS in the background — these modes only allow
+	     an ACTIVE session to continue (system red indicator visible). -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>screen-capture</string>
+	</array>
+
+	<!-- FR-052/FR-003 local-network explanation: the LAN transport (RF →
+	     receiver) touches the local network on iOS 14+; the in-app
+	     ConsentExplainerView explains capture BEFORE the flow starts. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Wavelink connects to your relaying receiver directly over your home Wi-Fi to send the captured audio stream. No data leaves your local network.</string>
+
+	<!-- mDNS service advertisement for discovery (FR-003, ADR-006 service
+	     `_wdr._tcp`). Browsing this service is what triggers the local-network
+	     TCC prompt. -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_wdr._tcp</string>
+	</array>
+
+	<!-- NO NSMicrophoneUsageDescription: this shell captures session/app audio
+	     only (CapturePolicy.microphoneInvolved == false for every mode). A future
+	     input-node branch would add mic TCC as its own permission surface. The
+	     datasource app declares its own Info.plist values; the BROADCAST
+	     EXTENSION carries its OWN plist (Sources/WDRiOSEmitterBroadcast/
+	     BroadcastExtension-Info.plist) in the app+extension Xcode project. -->
+</dict>
+</plist>

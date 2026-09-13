@@ -1,0 +1,56 @@
+# Wavelink License — Proprietary, Source-Available
+
+Copyright (C) 2026 Shivam Katyan ("the author", product: **Wavelink**).
+All rights reserved.
+
+Wavelink is **proprietary software**. Its source code is published in this
+repository for transparency and review only. It is **not** open source and is
+not released under the MIT, Apache-2.0, or any other open-source license.
+There is no implied license to use it for anything other than what is stated
+here.
+
+## What you may do (free, personal, non-commercial)
+
+- Install and use the **official Wavelink builds** published on the GitHub
+  Releases page (https://github.com/shivamkatyan/wavelink/releases)
+  on your own devices — including under the Free tier, and for personal,
+  non-commercial use of the Pro tier.
+- Read the source in this repository to understand how Wavelink works.
+
+## What you may not do
+
+- Redistribute, republish, or resell Wavelink — in whole or in part, modified
+  or unmodified, in source or binary form — including publishing your own
+  forked, renamed, or "built from source" version.
+- Use the codebase, or any portion of it, in your own products, tools, or
+  projects — including personal or non-commercial projects. You may use the
+  official published **builds**, but you may not use the **code** itself.
+- Remove or alter any copyright, trademark, or proprietary notices.
+
+## Commercial use
+
+Any commercial use — by a business, for revenue-generating activity, or as part
+of a paid product or service — requires a separate paid commercial license.
+Commercial terms are available on request; open a GitHub issue on this
+repository to inquire.
+
+## Support & requests
+
+Support, feature requests, bug reports, and product requests are handled through
+**GitHub issues** on this repository. Do not fork and re-ship the project to
+work around a request — raise a ticket instead.
+
+## Warranty & liability
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+
+Third-party open-source components included in Wavelink builds remain licensed
+under their own terms; the required attribution notices are in
+[`docs/planning/LICENSE-NOTICES.md`](docs/planning/LICENSE-NOTICES.md).

@@ -1,0 +1,28 @@
+# WDR dependency license policy (mirrors docs/planning/DEPENDENCY_EVALUATION.md
+# and SBOM_POLICY.md): permissive licenses only.
+# - This policy governs THIRD-PARTY DEPENDENCIES. The Wavelink product itself
+#   is proprietary, source-available software (repo-root LICENSE); its crates
+#   carry `license = "LicenseRef-Proprietary"`, which is allowed here for the
+#   workspace members only — it must not be used to justify a dependency.
+# - GPL/AGPL/SSPL/CC-BY-NC/Unicode-non-free are DENIED by absence from allow.
+# - MPL-2.0 allowed ONLY for the recorded uniffi decision; review any other use.
+# - SPDX expression entries match partial expressions (e.g. "MIT" matches
+#   "MIT OR Apache-2.0").
+#
+# Run: cargo deny check licenses   (also wired to the CI runner license gate)
+[licenses]
+allow = [
+    "LicenseRef-Proprietary",  # Wavelink workspace members only (product license)
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "CC0-1.0",
+    "Zlib",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "OpenSSL",
+    "MPL-2.0",
+]

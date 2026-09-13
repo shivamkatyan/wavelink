@@ -1,0 +1,35 @@
+[package]
+name = "wdr_crypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "WDR security foundation: Noise XX pairing, identity/static-key conversion, AEAD session ciphers, replay window, key separation and 0-RTT guard."
+
+[dependencies]
+# Noise XX handshake (ADR-006 / SECURITY_SPEC §2.1). Pattern + suite locked:
+#   Noise_XX_25519_ChaChaPoly_BLAKE2s  (psk=0, no fallback)
+# The crate's private `Staticx25519` DH maps our ed25519-derived X25519 static
+# secret through `x25519_dalek::StaticSecret` for clamping, and forwards the
+# raw-pubkey contract back to snow.
+snow = { version = "0.10.0", default-features = false, features = ["std", "risky-raw-split", "use-blake2", "use-chacha20poly1305", "use-curve25519", "use-getrandom"] }
+
+# Long-term identity keys: ed25519 (pairing pubkey / fingerprint).
+ed25519-dalek = { version = "3.0.0", features = ["hazmat", "rand_core", "zeroize"] }
+
+# X25519: ephemeral key agreement + deterministic ed25519 -> x25519 static mapping.
+x25519-dalek = { version = "3.0.0", features = ["static_secrets", "zeroize"] }
+
+# AEAD data-plane: XChaCha20-Poly1305 (default, 24 B nonce) and ChaCha20-Poly1305
+# (12 B nonce driven by a persisted monotonic counter / nonce-accounting engine).
+chacha20poly1305 = { version = "0.11.0", features = ["getrandom", "rand_core"] }
+
+# HKDF separation of the Noise split keys into per-plane / per-direction session keys.
+hkdf = { version = "0.13.0", default-features = false }
+sha2 = { version = "0.11.0", default-features = false }
+
+# Entropy.
+rand = { version = "0.10.2", features = ["sys_rng", "thread_rng"] }
+
+[dev-dependencies]
+proptest = "1.11.0"

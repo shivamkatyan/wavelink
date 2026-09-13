@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<meta name="description" content="{{DESC}}">
+<link rel="stylesheet" href="{{BASE}}/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%234f46e5'/><path d='M18 26h7v12h-7zM28 20h7v24h-7zM38 24h7v16h-7z' fill='white'/></svg>">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="{{BASE}}/index.html" aria-label="Wavelink home">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#4f46e5"/><path d="M18 26h7v12h-7zM28 20h7v24h-7zM38 24h7v16h-7z" fill="#fff"/></svg>
+      <span>Wireless&nbsp;DAC Relay</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="{{BASE}}/index.html"{{HOME_CLASS}}>Home</a>
+      <a href="{{BASE}}/docs/index.html"{{DOCS_CLASS}}>Docs</a>
+      <a href="https://github.com/{{REPO}}" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+<main id="main" class="wrap main-width">
+{{BODY}}
+</main>
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <p><strong>Wavelink</strong> — Wi-Fi audio relay for a portable DAC. Source-available · free for personal use; commercial license required.</p>
+    <p class="footer-honest">
+      Honest gates: macOS Screen-Recording TCC, Windows WASAPI native check, Android device capture,
+      iOS <code>usbAudio</code>/local-network, USB-DAC hotplug, Bluetooth lab, bit-perfect loopback, and
+      store signing/notarization are pending external gates with runbooks — nothing here overclaims them.
+      Android is a sideloadable signed dev build; macOS is an unsigned developer DMG.
+    </p>
+    <p class="footer-links">
+      <a href="{{BASE}}/docs/index.html">User docs</a> ·
+      <a href="https://github.com/{{REPO}}/tree/{{BRANCH}}/docs/user">Docs source</a> ·
+      <a href="https://github.com/{{REPO}}/blob/{{BRANCH}}/docs/orchestration/RELEASE_STATUS.md">Build status</a>
+    </p>
+  </div>
+</footer>
+</body>
+</html>

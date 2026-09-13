@@ -1,0 +1,66 @@
+# linux-receiver — standalone Linux Bluetooth A2DP-sink receiver crate
+# (t-B5-linux-receiver).
+#
+# This crate is standalone on PURPOSE: it is NOT a member of the root WDR
+# workspace (it embeds its own `[workspace]` so `cargo` treats it as its own
+# project root). Zero core-crate dependencies.
+#
+# The portable surface (`src/lib.rs` — RenderSink trait, LinuxReceiverApp,
+# BluetoothMesh honesty matrix, FakeRenderSink) has NO dependencies and
+# builds/tests on any host. The native BlueZ A2DP-sink backend
+# (`src/bluez.rs` — register `org.bluez.Profile1` with the `a2dp_sink` role,
+# receive the A2DP transport, render through a PipeWire media sink to the
+# selected USB DAC) is BOTH `#[cfg(target_os = "linux")]`- and
+# feature-`bt`-gated: on this macOS host it is NOT compiled at all (target
+# gate), and on a Linux runner it becomes the only full public Bluetooth
+# receive+render path in the product (ADR-009 / PLATFORM_MATRIX §B) — see
+# build-check.md for what is validated here vs Linux-runner/bt-lab gated.
+[package]
+name = "linux-receiver"
+version = "0.0.1"
+edition = "2021"
+license = "LicenseRef-Proprietary"
+rust-version = "1.98"
+description = "Wavelink — Linux Bluetooth A2DP-sink receiver scaffold (BlueZ Profile1 + PipeWire media sink)."
+
+[dependencies]
+
+# No portable dependencies. The D-Bus / PipeWire bindings are declared only for
+# Linux targets below and only ever compiled there.
+
+[features]
+default = ["bt"]
+# BlueZ `a2dp_sink` Profile1 registration + media-sink render backend
+# (`src/bluez.rs`). Compiled ONLY on Linux targets (`#[cfg(target_os =
+# "linux")]` inside lib.rs), so `default` is inert on macOS/Windows and the
+# crate builds anywhere WITHOUT a Linux Bluetooth stack. The `zbus` binding is
+# pure-Rust (MIT) — no system libdbus needed on a Linux runner.
+bt = ["dep:zbus"]
+# PipeWire media-sink render wiring (the actual PipeWire daemon node the
+# received audio is rendered to). NOT default: it requires libpipewire on the
+# Linux runner (mirror of linux-emitter's `pipewire` feature) — confirmed by
+# `cargo check --features bt,pipewire` on a PipeWire-capable runner, never here.
+pipewire = ["dep:pipewire"]
+
+# Linux-only native bindings (MIT/Apache-2.0, both permissive per deny.toml):
+# - zbus:   pure-Rust D-Bus client (MIT) — BlueZ ProfileManager1/Profile1.
+#           `blocking-api` is a default feature (zbus::blocking::Connection).
+# - pipewire: pipewire-rs bindings (MIT; dynamic-linking only in our builds;
+#           libpipewire itself is LGPL-2.1 as an OS library, recorded exception
+#           in DEPENDENCY_EVALUATION.md / SBOM_POLICY.md). Optional + feature-
+#           gated so a bare Linux runner without pipewire dev headers still
+#           builds the `bt` surface.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "4", optional = true }
+pipewire = { version = "0.10", optional = true }
+
+[dev-dependencies]
+
+[workspace]
+# Standalone project: `cargo` invoked from this directory treats this crate as
+# its own workspace root and ignores the parent WDR workspace when running
+# `cargo build/test/clippy/fmt` here. The parent WDR workspace excludes
+# platform/ via its explicit members list.
+
+[profile.release]
+lto = "thin"

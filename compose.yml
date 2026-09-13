@@ -1,0 +1,131 @@
+# WDR local dev harness — Docker Compose (B1 reference-sim compose harness).
+#
+# OWNER: DevEx (this file is the integration-owned compose contract; the refsim
+# worker owns crates/wdr_refsim). Run from repo root:
+#   docker compose config --quiet          # validate
+#   docker compose up -d --build           # bring up with default (clean) profile
+#   bash docker/bootstrap-netem.sh         # full profile suite + asserts (idempotent)
+#
+# SERVICES
+#   emitter-sim   runs the ref emitter (`cargo run -p wdr_refsim --bin ref_emitter`)
+#                 when the binary exists, else a readiness-polling placeholder.
+#                 Shares the netem network namespace (network_mode: service:netem).
+#   receiver-sim  runs the ref receiver (`cargo run -p wdr_refsim --bin ref_receiver`)
+#                 when it exists, else the same placeholder. Plain peer on wdr-net.
+#   netem         the ONLY service with cap_add: [NET_ADMIN]. Applies the
+#                 `tc netem` profile (docker/netem.sh) to the bridge egress.
+#                 Because emitter-sim shares ITS netns, netem shapes the
+#                 emitter→receiver direction without NET_ADMIN on any sim.
+#   metrics       lightweight collector (docker/metrics.sh) tailing the shared
+#                 /tmp/metrics volume written by the sims + netem, and producing
+#                 aggregate/ready snapshots for docker/assert.sh.
+#
+# CAPABILITIES (documented here, mirrored in DEVELOPMENT_ENVIRONMENT.md via the
+# B1 report): NET_ADMIN is granted to `netem` ONLY. No other service gets any
+# capability. Docker must run with a bridge driver that honors cap_add +
+# `tc` in a container (Linux hosts / Docker Desktop WSL2 backend; the CI job in
+# .github/workflows/reference-sim.yml must run on a self-hosted NET_ADMIN-capable
+# runner — see the workaround note there).
+#
+# PROFILES
+#   WDR_NETEM_PROFILE on the netem service: clean (default), loss0.5, loss1,
+#   loss5, jitter30, reorder, duplication, bandwidth, disconnect.
+#   Mapping to `tc netem` is in docker/netem.sh.
+#
+# READINESS (never sleep-and-assume): each sim's entrypoint polls for the ref
+# binary and waits on /tmp/netem-ready + peer readiness with a bounded retry
+# loop. The compose service does NOT pass while pending — it reports
+# "sim not ready" gracefully so topology/NET_ADMIN are still validated even
+# before crates/wdr_refsim lands.
+
+name: wdr
+
+services:
+  netem:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: ${WDR_DEV_IMAGE:-wdr-dev}
+    container_name: wdr-netem
+    # NET_ADMIN ONLY here — grants the `tc` control needed to shape the bridge.
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - wdr-net
+    environment:
+      WDR_NETEM_PROFILE: ${WDR_NETEM_PROFILE:-clean}
+    volumes:
+      - wdr-metrics:/tmp/metrics
+      - ./docker/netem.sh:/workspace/docker/netem.sh:ro
+    entrypoint: ["/bin/bash", "/workspace/docker/netem.sh"]
+    restart: "no"
+
+  emitter-sim:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: ${WDR_DEV_IMAGE:-wdr-dev}
+    container_name: wdr-emitter-sim
+    # Shares netem's network namespace so `tc netem` on wdr-net shapes the
+    # emitter→receiver egress. This is what lets ONLY netem hold NET_ADMIN.
+    network_mode: service:netem
+    depends_on:
+      netem:
+        condition: service_started
+    environment:
+      WDR_ROLE: emitter
+      WDR_NETEM_PROFILE: ${WDR_NETEM_PROFILE:-clean}
+    volumes:
+      - wdr-metrics:/tmp/metrics
+      - ./docker/sim-start.sh:/workspace/docker/sim-start.sh:ro
+    entrypoint: ["/bin/bash", "/workspace/docker/sim-start.sh"]
+    restart: "no"
+
+  receiver-sim:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: ${WDR_DEV_IMAGE:-wdr-dev}
+    container_name: wdr-receiver-sim
+    networks:
+      - wdr-net
+    depends_on:
+      netem:
+        condition: service_started
+    environment:
+      WDR_ROLE: receiver
+      WDR_NETEM_PROFILE: ${WDR_NETEM_PROFILE:-clean}
+    volumes:
+      - wdr-metrics:/tmp/metrics
+      - ./docker/sim-start.sh:/workspace/docker/sim-start.sh:ro
+    entrypoint: ["/bin/bash", "/workspace/docker/sim-start.sh"]
+    restart: "no"
+
+  metrics:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: ${WDR_DEV_IMAGE:-wdr-dev}
+    container_name: wdr-metrics
+    networks:
+      - wdr-net
+    environment:
+      WDR_METRICS_DIR: /tmp/metrics
+    volumes:
+      - wdr-metrics:/tmp/metrics
+      - ./docker/metrics.sh:/workspace/docker/metrics.sh:ro
+    entrypoint: ["/bin/bash", "/workspace/docker/metrics.sh"]
+    restart: "no"
+
+networks:
+  wdr-net:
+    # Internal: no outbound NAT — sims communicate only via the netem gateway
+    # entity sharing the namespace. Keeps the harness hermetic.
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+volumes:
+  wdr-metrics:

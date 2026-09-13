@@ -1,0 +1,52 @@
+# syntax=docker/dockerfile:1
+# WDR images — built in two stages so the SHIPPED image is lean.
+#
+#   target `builder` (tagged wdr-build): the toolchain for building the
+#     reference sim + Linux shells. Purpose-built rust slim image + only the
+#     workspace's actual build deps (no cmake/alsa/dbus that nothing here
+#     needs). Used by scripts/package/linux.sh for in-container builds.
+#   default final stage (tagged wdr-dev): the RUNTIME image the compose harness
+#     runs — a Debian slim with just bash + iproute2 (`tc` for netem) and the
+#     prebuilt binaries baked in. NO toolchain, NO build deps, NO full-OS bloat
+#     (slim base). This is the "lean image" the compose/soak/ccspike use.
+#
+#   Build both tags in one pass (the final stage layers on the cached builder):
+#     docker build -f Dockerfile.dev --target builder -t wdr-build .
+#     docker build -f Dockerfile.dev -t wdr-dev .          # reuses builder cache
+
+# ---- stage 1: builder (toolchain) -----------------------------------------
+FROM rust:1.98-slim-bookworm AS builder
+ENV CARGO_HOME=/usr/local/cargo \
+    RUSTUP_INTL_BACKEND=no \
+    PATH=/usr/local/cargo/bin:$PATH
+# Only what the workspace actually builds with: cc + c++ (ring/opusic-sys),
+# cmake (libflac-sys), pkg-config + libssl-dev (openssl-sys), ca-certificates
+# (cargo/rustup TLS). Everything else the old image carried (curl, alsa/dbus
+# dev, iproute2, netcat, ping) is harness-only and now lives in the runtime
+# stage ONLY where it is actually used — this builder is minimal.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc g++ make cmake pkg-config libssl-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /workspace
+COPY . .
+# Prebuild the reference sim binaries at IMAGE-BUILD time (network available
+# here). The runtime compose network is `internal` (no egress) so the harness
+# must run prebuilt binaries — baking them in makes it hermetic (Docker-Desktop
+# macOS surfaced this: host binaries are Mach-O, containers need Linux ELF).
+RUN cargo build --release -p wdr_refsim
+
+# ---- stage 2: lean runtime (harness) ---------------------------------------
+FROM debian:bookworm-slim AS runtime
+# bash = harness entrypoints; iproute2 = `tc` (netem). That's it: no toolchain,
+# no compilers, no python (metrics.sh is pure bash/awk), no dev headers.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        bash iproute2 ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /workspace/target/release
+WORKDIR /workspace
+COPY --from=builder /workspace/target/release/ref_emitter /workspace/target/release/ref_emitter
+COPY --from=builder /workspace/target/release/ref_receiver /workspace/target/release/ref_receiver
+# Also expose them in PATH for ad-hoc runner use.
+COPY --from=builder /workspace/target/release/ref_emitter /usr/local/bin/ref_emitter
+COPY --from=builder /workspace/target/release/ref_receiver /usr/local/bin/ref_receiver
+CMD ["sleep", "infinity"]

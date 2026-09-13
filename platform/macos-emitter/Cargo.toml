@@ -1,0 +1,63 @@
+# macos-emitter — standalone macOS emitter crate (t-B3-macos).
+#
+# This crate is standalone on PURPOSE: it is NOT a member of the root WDR
+# workspace (it embeds its own `[workspace]` so `cargo` treats it as its own
+# project root). Zero core-crate dependencies. The portable surface
+# (`src/lib.rs` — CaptureSource trait, MacEmitterApp, FakeCaptureSource)
+# has NO dependencies and builds/tests on any host. The macOS capture backend
+# (`src/backend*` via coreaudio-sys + screencapturekit + core-foundation)
+# is `#[cfg(target_os = "macos")]`-gated and compiled on a real macOS host
+# (this one) — see `build-check.md` for what is compile-validated here vs
+# hardware-gated.
+[package]
+name = "macos-emitter"
+version = "0.0.1"
+edition = "2021"
+license = "LicenseRef-Proprietary"
+rust-version = "1.98"
+description = "Wavelink — macOS emitter scaffold (ScreenCaptureKit + Core Audio HAL/process taps)."
+
+[dependencies]
+# The live transport seam deliberately reverses the old "zero core-crate deps"
+# stance: `--stream` drives the PROVEN core pipeline (encode → CRC → QUIC)
+# through the shared `wdr_refsim::sink::QuicAudioSink`/`AudioFrameSink` seam,
+# so this shell reuses the 218-test engine instead of reimplementing it. No
+# direct tokio/quinn/wdr_codec deps — the sink owns its runtime + connection.
+wdr_proto      = { path = "../../crates/wdr_proto" }
+wdr_fakes      = { path = "../../crates/wdr_fakes" }
+wdr_entitlement = { path = "../../crates/wdr_entitlement" }
+wdr_refsim     = { path = "../../crates/wdr_refsim" }
+serde_json     = { version = "1.0", default-features = false, features = ["alloc"] }
+
+[features]
+default = []
+# Per-application capture via Core Audio process taps (macOS 14.2+, ADR-008).
+# Compiles src/backend/tap.rs (FFI symbol link gate + adapter seam). Actual
+# CATapDescription construction is ObjC-gated and hardware-gated — see
+# build-check.md. On non-macOS hosts this feature is inert (backend is
+# #[cfg(target_os = "macos")]).
+macos14-taps = []
+
+# macOS-only backend deps: only resolved/compiled on macOS targets.
+# - coreaudio-sys:   bindgen'd CoreAudio HAL bindings (MIT). Generates against
+#   the host SDK; compiled + HAL reads live-validated on this host.
+# - screencapturekit: safe ScreenCaptureKit wrapper (MIT OR Apache-2.0 — the
+#   evolution of `screencapturekit-rs`, same doom-fish repo; acceptable per
+#   DEPENDENCY_EVALUATION.md). default-features = [] == its default (empty).
+# - core-foundation: CFString/CFArray interop for HAL property reads.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+coreaudio-sys = "0.2.18"
+core-foundation = "0.10.1"
+screencapturekit = { version = "10.0.3", default-features = false }
+
+[dev-dependencies]
+
+[workspace]
+# Standalone project: `cargo` invoked from this directory treats this crate as
+# its own workspace root and ignores the parent WDR workspace when running
+# `cargo build/test/clippy/fmt` here. The parent WDR workspace excludes this
+# directory via its explicit `members = ["crates/*", ...]` list.
+
+[profile.release]
+lto = "thin"

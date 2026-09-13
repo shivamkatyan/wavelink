@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <application
+        android:label="Wavelink"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/WDRTheme"
+        android:supportsRtl="true">
+        <service android:name=".emitter.EmitterService" android:exported="false" android:foregroundServiceType="mediaProjection" />
+        <service android:name=".receiver.ReceiverService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
+        <activity android:name=".RoleLauncherActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".emitter.EmitterActivity" android:exported="false" android:launchMode="singleTask" />
+        <activity android:name=".receiver.ReceiverActivity" android:exported="false" android:launchMode="singleTask" />
+    </application>
+</manifest>

@@ -1,0 +1,9 @@
+[package]
+name = "wdr_entitlement"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Entitlement/tier model: EntitlementProvider seam, Free/Pro feature policy, negotiation intersection, live-change renegotiation plans."
+
+[dependencies]

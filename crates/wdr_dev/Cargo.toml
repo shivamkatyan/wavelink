@@ -1,0 +1,9 @@
+[package]
+name = "wdr_dev"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "WDR DevEx placeholder crate: dev-environment self-test."
+
+[dependencies]

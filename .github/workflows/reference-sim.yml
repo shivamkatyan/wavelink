@@ -1,0 +1,85 @@
+name: reference-sim
+
+# WDR reference-sim compose-suite CI job.
+#
+# DISABLED (`if: false` below) — NOT runnable on standard ubuntu-latest hosted
+# runners. It needs a runner whose Docker daemon grants NET_ADMIN to a compose
+# service (the `netem` container runs `tc qdisc` with `cap_add: [NET_ADMIN]`).
+#
+# NET_ADMIN on GitHub runners:
+#   - Standard `ubuntu-latest` hosted runner containers DO NOT get NET_ADMIN by
+#     default, and `docker compose up` there cannot honor cap_add unless the
+#     runner is Docker-in-Docker with `--privileged` or `--cap-add=NET_ADMIN`.
+#     GitHub-hosted runners do not allow changing the outer daemon flags, so
+#     this job would fail on them even though the code is green.
+#   - Therefore this job MUST run on a SELF-HOSTED runner labeled
+#     `self-hosted,linux` whose Docker daemon is started with
+#     `--iptables=true` and supports `cap_add` (the standard `dockerd` on a
+#     self-hosted Linux runner does). Alternatively set
+#     `DOCKER_OPTS="--default-ulimit nofile=..."` is unrelated;
+#     the key requirement is a daemon that honors `--cap-add=NET_ADMIN` in
+#     `docker compose up` (any stock dockerd on Linux does — GitHub's hosted
+#     runner specifically does NOT because it is itself a nested container).
+#
+# ENABLE REQUEST (flip after refsim + suite are green on a self-hosted runner):
+#   1. Confirm crates/wdr_refsim (ref_emitter, ref_receiver) landed and the
+#      workspace builds.
+#   2. Confirm `docker compose config --quiet` and the local suite
+#      (`bash docker/bootstrap-netem.sh`) are green on a NET_ADMIN-capable host.
+#   3. Attach a `self-hosted,linux` runner with a working dockerd.
+#   4. Change this job's `if: false` -> `if: true` (or remove the line) and
+#      set `runs-on: [self-hosted, linux]`.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  IMAGE: wdr-dev
+
+jobs:
+  reference-sim-compose:
+    if: false # DISABLED: see NET_ADMIN note above + enable request in header
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker/NET_ADMIN capability preflight
+        run: |
+          docker version >/dev/null
+          # The netem service applies `tc qdisc` with cap_add: [NET_ADMIN];
+          # fail fast if the daemon cannot create an internal bridge.
+          docker network create --driver bridge --internal --subnet=10.255.255.0/29 wdr-preflight
+          docker network rm wdr-preflight
+        shell: bash
+
+      - name: Build dev image
+        run: docker build -f Dockerfile.dev -t "$IMAGE" .
+
+      - name: Compose config validates
+        run: docker compose config --quiet
+
+      - name: Compose up (clean)
+        run: WDR_NETEM_PROFILE=clean docker compose up -d --build
+
+      - name: Containerized assertions for profile suite
+        run: bash docker/bootstrap-netem.sh
+        shell: bash
+
+      - name: Tear down (normalized)
+        if: always()
+        run: docker compose down -v --remove-orphans || true
+        shell: bash
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          docker compose ps || true
+          (docker logs wdr-netem 2>&1 | tail -40 || true)
+          (docker logs wdr-emitter-sim 2>&1 | tail -40 || true)
+          (docker logs wdr-receiver-sim 2>&1 | tail -40 || true)
+        shell: bash

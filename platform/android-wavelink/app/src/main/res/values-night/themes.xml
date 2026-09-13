@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dark theme: value-night qualifier switches automatically with the system
+     uiMode; the colors below resolve to the dark palette. -->
+<resources>
+    <style name="WDRTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/wdr_background</item>
+        <item name="android:colorAccent">@color/wdr_accent</item>
+        <item name="android:statusBarColor">@color/wdr_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

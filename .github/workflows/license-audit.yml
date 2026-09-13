@@ -1,0 +1,98 @@
+name: license-audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# TODO(enable-after-b0-lockfile): this workflow is DISABLED until the B0 Cargo.lock
+# lands in the workspace (t-B0-ossdep created the Cargo.lock placeholder; real pins
+# arrive with the B0 lockfile).
+#
+# ENABLE REQUEST:
+#   1. Confirm `Cargo.lock` is committed with pinned deps (DEPENDENCY_EVALUATION.md §Locked list).
+#   2. Confirm `deny.toml` exists at repo root with the SBOM_POLICY.md license gate
+#      (forbid GPL/AGPL/SSPL/missing-license on runtime; allow MPL-2.0 for uniffi with
+#      recorded decision; allow BSD/MIT/Apache/ISC/Zlib).
+#   3. Set the `if` below to `${{ (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.ref, 'refs/tags/'))) }}` (or true)
+#      so the enabling decision is explicit — leaving it at `false` keeps the workflow inert.
+#   4. Remove the `exit 0` guard from the step bodies below.
+
+jobs:
+  license-audit:
+    if: false # DISABLED: switch to the enabling predicate in step 3 of the TODO(enable-after-b0-lockfile) block
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain (pinned stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo-home + binary registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/cargo-deny
+            ~/.cache/cargo-audit
+          key: ${{ runner.os }}-cargo-audit-${{ hashFiles('**/Cargo.lock') }}
+
+      # Cargo tools are installed per-run so compiler-sys crate versions match the pin.
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny --root "$RUNNER_TEMP/ctools"
+        env:
+          CARGO_NET_RETRY: 5
+
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit --root "$RUNNER_TEMP/ctools"
+        env:
+          CARGO_NET_RETRY: 5
+
+      - name: Install cargo-cyclonedx
+        run: >
+          cargo install --locked cargo-cyclonedx --root "$RUNNER_TEMP/ctools"
+          || echo "::warning::cargo-cyclonedx install failed (best-effort SBOM step)"
+        env:
+          CARGO_NET_RETRY: 5
+
+      - name: License + advisory gate (cargo-deny)
+        if: true # second half of the enable marker
+        run: |
+          "$RUNNER_TEMP/ctools/bin/cargo-deny" check licenses
+          exit 0 # TODO(enable-after-b0-lockfile): remove this guard when deny.toml + lockfile land
+
+      - name: Advisory scan (cargo-audit)
+        if: true # second half of the enable marker
+        run: |
+          "$RUNNER_TEMP/ctools/bin/cargo-audit" audit
+          exit 0 # TODO(enable-after-b0-lockfile): remove this guard when the lockfile lands
+
+      - name: Semantic CI gate — lockfile bakes a conflict into generated validity (no-op placeholders)
+        if: false
+        run: echo "placeholder — see SBOM_POLICY.md for gate semantics"
+
+      - name: Generate SBOM (cargo-cyclonedx / syft)
+        if: true # second half of the enable marker
+        run: |
+          if [ -x "$RUNNER_TEMP/ctools/bin/cargo-cyclonedx" ]; then
+            "$RUNNER_TEMP/ctools/bin/cargo-cyclonedx" cyclonedx --output-dir "$RUNNER_TEMP/sbom" || \
+              echo "::warning::cyclonedx generation failed for this revision"
+          else
+            echo "::notice::cargo-cyclonedx unavailable; SBOM step skipped"
+          fi
+          exit 0 # TODO(enable-after-b0-lockfile): remove this guard
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: ${{ runner.temp }}/sbom/
+          if-no-files-found: ignore

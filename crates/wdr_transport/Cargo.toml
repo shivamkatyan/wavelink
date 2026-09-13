@@ -1,0 +1,33 @@
+[package]
+name = "wdr_transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "WDR QUIC transport (quinn) spike: datagram lossy media, reliable-stream lossless media with retransmit deadline, control stream, and measured transport evidence (t-B0-transport)."
+
+[dependencies]
+quinn = { version = "0.11.11", default-features = true }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync"] }
+bytes = "1.12.1"
+# Dev/test identity + loopback connection for the measurement example and the
+# loopback adapter. Pulled only when the `spike-meas` feature is on.
+rcgen = { version = "0.14.0", optional = true }
+
+[dev-dependencies]
+rand = "0.10.2"
+rcgen = "0.14.0"
+
+[lib]
+name = "wdr_transport"
+
+[features]
+# Measurement-only surface (meas module + the loopback spike example). The
+# transport contract tests in `tests/` do NOT need this feature. Kept out of
+# the default build so the crate the B1 system depends on stays lean.
+spike-meas = ["dep:rcgen"]
+
+[[example]]
+name = "transport_spike"
+path = "examples/transport_spike.rs"
+required-features = ["spike-meas"]

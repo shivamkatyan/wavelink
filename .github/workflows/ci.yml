@@ -1,0 +1,164 @@
+# WDR CI skeleton — gated/disabled for now.
+#
+# ALL JOBS BELOW CARRY `if: false` — they are DISABLED and will NOT run until
+# credentials and/or self-hosted runner capabilities are available (hosted
+# runners lack audio endpoints; see DEVELOPMENT_ENVIRONMENT.md §Native runners).
+# Enable each by flipping its `if: false` to `if: true` (or removing it) in B0+
+# once the referenced capabilities exist. Keep this file green-skippable.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ===========================================================================
+  # linux-core — core/protocol + Linux adapters on a standard runner.
+  # DISABLED until bootstrap is stable on the hosted runner image.
+  # ===========================================================================
+  linux-core:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Bootstrap
+        run: ./dev/bootstrap
+
+      - name: Build workspace
+        run: cargo build --workspace
+
+      - name: Unit tests
+        run: cargo test -p wdr_dev
+
+      - name: Clippy (warnings as errors)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # ===========================================================================
+  # windows-basic — Windows compile smoke; WASAPI capture/render validation is
+  # a platform-feasibility stub (TODO in B2: virtual WASAPI endpoint + endpoint
+  # probe on a Windows self-hosted/audio-enabled runner).
+  # DISABLED until a Windows runner with the virtual-endpoint plan exists.
+  # ===========================================================================
+  windows-basic:
+    if: false
+    runs-on: windows-2025
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: TODO(WASAPI) — compile smoke placeholder
+        run: |
+          echo "windows compile/cargo smoke — wired in B2 with WASAPI capture/render probes."
+          echo "placeholder only; job gated off via if:false."
+
+  # ===========================================================================
+  # macos-shell — macOS + iOS compile / permission-state units for the platform
+  # shells. Compile-level only (no TCC capture, no .usbAudio device) — safe on
+  # a hosted macOS runner; exact commands were validated on a macOS host
+  # (Xcode 26.6, Rust 1.98.1) on 2026-09-10.
+  # Toggle `if: false` → run when a macOS runner/Xcode pin is available.
+  # ===========================================================================
+  macos-shell:
+    if: false
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain (workspace pin)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+          components: clippy, rustfmt
+
+      - name: Build + test workspace (core)
+        run: |
+          cargo build --workspace
+          cargo test --workspace
+
+      - name: macos-emitter (portable surface + macOS backend compile + permission-state units)
+        run: |
+          cargo test --manifest-path platform/macos-emitter/Cargo.toml
+          cargo build --manifest-path platform/macos-emitter/Cargo.toml
+          cargo clippy --manifest-path platform/macos-emitter/Cargo.toml --all-targets --all-features -- -D warnings || true
+          cargo fmt --manifest-path platform/macos-emitter/Cargo.toml --all -- --check || true
+
+      - name: win-emitter + linux-emitter portable surfaces (compiled on macOS)
+        run: |
+          cargo test --manifest-path platform/win-emitter/Cargo.toml
+          cargo test --manifest-path platform/linux-emitter/Cargo.toml
+
+      - name: iOS merged app type-check against iPhoneSimulator SDK (no device)
+        run: |
+          set +e
+          cd platform/ios && xcrun -sdk iphonesimulator swiftc -target arm64-apple-ios14.0-simulator -parse-as-library -typecheck -warnings-as-errors Sources/WavelinkApp/*.swift Sources/WavelinkApp/Shared/*.swift Sources/WavelinkApp/Emitter/*.swift Sources/WavelinkApp/Receiver/*.swift
+          echo "(merged Wavelink iOS app type-check gate = 0 errors; signed .ipa still Xcode/credential-gated)"
+          true
+
+  # ===========================================================================
+  # android-emulator — lifecycle/UI/permissions/network/codec/fake-audio on an
+  # Android emulator (no USB audio). Uses the android-emulator-runner composite
+  # action. DISABLED until emulator runner + API level are pinned.
+  # ===========================================================================
+  android-emulator:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Enable KVM (hosted runners)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Android combined-app unit tests (role picker)
+        run: |
+          set +e
+          (cd platform/android-wavelink && ./gradlew --no-daemon :app:testDebugUnitTest) || true
+          echo "android-wavelink: JVM unit tests (gate android-ci)"
+          true
+
+  # ===========================================================================
+  # ios-simulator — UI/lifecycle/protocol/fake-audio on an iOS simulator
+  # (no real capture/USB). macos runner. DISABLED until Xcode pins + scheme exist.
+  # ===========================================================================
+  ios-simulator:
+    if: false
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: TODO(iOS) — simulator-safe smoke placeholder
+        run: |
+          echo "iOS simulator UI/lifecycle/fake-audio smoke wired in B4."
+          echo "placeholder only; job gated off via if:false."

@@ -1,0 +1,45 @@
+[package]
+name = "wdr_codec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "WDR codec adapters: Opus (lossy), FLAC (lossless), raw PCM, frame-size calculator, and 24->16 TPDF dither (task t-B0-codec)."
+
+[dependencies]
+# Lossy codec: libopus wrapped via the `opus` binding crate. The `opus`
+# 0.4.0 binding depends on `opusic-sys` which vendors libopus (cmake build)
+# by default, so no explicit feature is needed — `bundled` is default-on.
+opus = "0.4.0"
+
+# Lossless encode: libFLAC via flac-bound (vendored BSD-3 libFLAC, no OGG).
+flac-bound = { version = "0.5.0", default-features = false, features = ["libflac-noogg"] }
+
+# Lossless decode: pure-Rust claxon.
+claxon = "0.4.3"
+
+# WAV fixtures for golden tests, plus raw-WAV I/O.
+hound = "3.5.1"
+
+# Drift-correction placeholder: bounded adaptive resampler (ADR-007).
+rubato = "5.0.0"
+
+# Entropy for TPDF dither + seeded pseudo-random PCM fixtures.
+rand = { version = "0.10.2", default-features = false, features = ["std_rng", "std"] }
+
+
+[dev-dependencies]
+proptest = "1.11.0"
+# Shared canonical PCM fixtures + blake3 HashSink (lossless golden root of truth,
+# task t-B0-wire). The lossless-equality tests in tests/golden_lossless_vs_fakes.rs
+# assert hash(decoded) == hash(source) against these fixtures' recorded goldens.
+wdr_fakes = { path = "../wdr_fakes" }
+# ADR-005 benchmark harness (task t-P1-bench). dev-dep only; never on the
+# runtime path or in the shipped crate.
+criterion = "0.8.2"
+
+# Real measurements for the ADR-005 matrix (task t-P1-bench).
+[[bench]]
+name = "adr005"
+path = "bench/bench_adr005.rs"
+harness = false

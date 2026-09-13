@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- WDR semantic palette (dark) — same tokens, dark-region hex pairs. -->
+<resources>
+    <color name="wdr_background">#1C1C1E</color>
+    <color name="wdr_surface">#26262A</color>
+    <color name="wdr_textPrimary">#F2F2F7</color>
+    <color name="wdr_textSecondary">#C7C7CC</color>
+    <color name="wdr_accent">#0A84FF</color>
+    <color name="wdr_good">#32D74B</color>
+    <color name="wdr_warn">#FFD60A</color>
+    <color name="wdr_error">#FF453A</color>
+    <color name="wdr_free">#8E8E93</color>
+    <color name="wdr_pro">#FF9F0A</color>
+</resources>

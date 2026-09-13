@@ -1,0 +1,300 @@
+# WDR Release workflow — build distributable platform packages and publish a
+# GitHub Release.
+#
+# Trigger:
+#   * push of a `v*` tag (e.g. `v0.1.0`)
+#   * manual run via "Run workflow" (workflow_dispatch) on any branch
+#
+# Every job is a THIN wrapper over `scripts/package/<platform>.sh` so the exact
+# local commands and the CI commands never diverge. Artifact naming and the
+# honest gate matrix (store/signing/hardware items stay pending) are documented
+# in docs/orchestration/PACKAGING.md and docs/orchestration/RELEASE_STATUS.md.
+#
+# Dependency policy: OFFICIAL actions only — actions/*, dtolnay/rust-toolchain,
+# actions/setup-java. No third-party release action is used; publishing uses
+# `gh` (preinstalled on runners) with the built-in GITHUB_TOKEN.
+name: release
+
+# The trigger key is quoted (`"on"`) so strict YAML 1.1 linters don't parse it
+# as a boolean — GitHub's own parser accepts either form.
+"on":
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ===========================================================================
+  # android — ubuntu: JDK17 + Android SDK (sdkmanager: android-34, build-tools
+  # 34.0.0), then scripts/package/android.sh (assembleDebug+Release, dev
+  # keystore, zipalign+apksigner). Uploads dist/android.
+  # ===========================================================================
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17 (temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('platform/android-*/**/*.gradle*', 'platform/android-*/gradle/**') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Prepare Android SDK (preinstalled on the runner)
+        shell: bash
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME }}
+        run: |
+          set -euo pipefail
+          # Ubuntu GH runners preinstall the Android SDK; use it (lean, no
+          # 130 MB commandline-tools download). Fall back to a fresh SDK root
+          # at $RUNNER_TEMP only if the image has none.
+          if [ -n "${ANDROID_SDK_ROOT:-}" ] && [ -d "$ANDROID_SDK_ROOT" ]; then
+            export ANDROID_HOME="$ANDROID_SDK_ROOT"
+          else
+            export ANDROID_HOME="${RUNNER_TEMP}/android-sdk"
+            mkdir -p "${ANDROID_HOME}/cmdline-tools"
+            curl -fsSL -o /tmp/cmt.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q /tmp/cmt.zip -d "${ANDROID_HOME}/cmdline-tools"
+            mv "${ANDROID_HOME}/cmdline-tools/cmdline-tools" "${ANDROID_HOME}/cmdline-tools/latest"
+          fi
+          echo "ANDROID_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
+
+          SDKM="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKM" ]; then
+            # Accept licenses. `yes` can SIGPIPE once sdkmanager closes stdin
+            # and `set -o pipefail` would abort the step — so run it with the
+            # pipe guard; a non-zero here is non-fatal (licenses are all-accept
+            # for the public SDK, and most are pre-accepted on GH images).
+            set +o pipefail
+            yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+            set -o pipefail
+          fi
+          # Ensure the exact toolchain android.sh needs (build-tools 34.0.0 +
+          # platform 34) are present; preinstalled images usually have them.
+          if [ ! -x "${ANDROID_HOME}/build-tools/34.0.0/apksigner" ]; then
+            [ -x "$SDKM" ] || { echo "::error::no sdkmanager; cannot install build-tools 34.0.0"; exit 1; }
+            "$SDKM" --sdk_root="$ANDROID_HOME" "platforms;android-34" "build-tools;34.0.0"
+          fi
+
+      - name: Package Android builds (assemble + sign)
+        shell: bash
+        run: bash scripts/package/android.sh
+
+      - name: Upload android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/android/
+          if-no-files-found: error
+
+  # ===========================================================================
+  # macos — macos-26: build macos-emitter release bin and wrap it in a signed
+  # .app + DMG via scripts/package/macos.sh. Uploads dist/macos.
+  # ===========================================================================
+  macos:
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('platform/macos-emitter/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Package macOS (app + ad-hoc signed DMG)
+        shell: bash
+        run: bash scripts/package/macos.sh
+
+      - name: Upload macos artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/macos/
+          if-no-files-found: error
+
+  # ===========================================================================
+  # linux — ubuntu (native): build linux-emitter release + tarball (+ .deb) via
+  # scripts/package/linux.sh. Uploads dist/linux.
+  # ===========================================================================
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('platform/linux-emitter/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Package Linux (tarball + optional .deb)
+        shell: bash
+        run: bash scripts/package/linux.sh
+
+      - name: Upload linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/linux/
+          if-no-files-found: error
+
+  # ===========================================================================
+  # windows — windows-2025: real EXE link, then zip via scripts/package/win.sh.
+  # Uploads dist/windows.
+  # ===========================================================================
+  windows:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain (windows-msvc target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('platform/win-emitter/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Package Windows (exe + zip)
+        shell: bash
+        run: bash scripts/package/win.sh
+
+      - name: Upload windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/windows/
+          if-no-files-found: error
+
+  # ===========================================================================
+  # ios — macos-26: unsigned simulator-SDK core libraries + README +
+  # RELEASE_AND_SIGNING.md via scripts/package/ios.sh. Uploads dist/ios.
+  # ===========================================================================
+  ios:
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Package iOS unsigned cores (simulator SDK)
+        shell: bash
+        run: bash scripts/package/ios.sh
+
+      - name: Upload ios artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: dist/ios/
+          if-no-files-found: error
+
+  # ===========================================================================
+  # publish — after all five build jobs: download every artifact, then create a
+  # GitHub Release for the tag. SKIP-IF-EXISTS (never overwrites an existing
+  # Release for the same tag; a re-run logs a clear warning instead).
+  # ===========================================================================
+  publish:
+    needs: [android, macos, linux, windows, ios]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+          merge-multiple: false
+
+      - name: Create (or skip) GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+
+          # workflow_dispatch on a branch is for manual builds/playground only —
+          # publishing needs a tag ref.
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "::notice::not a tag ref (GITHUB_REF_TYPE=${GITHUB_REF_TYPE}); skipping release creation."
+            exit 0
+          fi
+
+          # Already a Release for this tag? Skip (documented guard) — never
+          # clobber. To replace, delete the existing Release deliberately and
+          # re-run.
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::warning::Release '${TAG}' already exists — skipping publish (won't overwrite)."
+            exit 0
+          fi
+
+          # gh may only attach FILES — a glob that includes the macOS .app
+          # directory fails with "read ...: is a directory". Select the package
+          # files explicitly (mapfile needs bash 4+ = GH runners).
+          mapfile -t ASSETS < <(find dist-artifacts -type f \( \
+              -name '*.apk' -o -name '*.dmg' -o -name '*.zip' \
+              -o -name '*.tar.gz' -o -name '*.deb' \) | sort)
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "::error::no package files found; cannot create an empty Release."
+            exit 1
+          fi
+          echo "::group::Artifacts to publish"
+          for a in "${ASSETS[@]}"; do
+            echo "$a"
+          done
+          echo "::endgroup::"
+
+          # Build the notes with printf to avoid a multi-line double-quoted
+          # argument (strict shell parsers stumble on those); every wrapped
+          # line keeps a >= 12-space indent so it stays inside the YAML block.
+          NOTES=$(printf 'Wavelink %s packages (built by the release workflow; everything here is CI-generated and unsigned/store-gated).\n\nSee docs/orchestration/RELEASE_STATUS.md (gated: native-runner/hardware/credential items stay pending).' "${TAG}")
+
+          gh release create "${TAG}" \
+            "${ASSETS[@]}" \
+            --title "Wavelink ${TAG}" \
+            --notes "${NOTES}"
+          echo "::notice::Published Release '${TAG}'"

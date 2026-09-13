@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- WDR semantic palette (light) — the shared brand tokens (same hex pairs as
+     the iOS `Palette` and macOS `Wd`; WCAG-AA contrast-checked). -->
+<resources>
+    <color name="wdr_background">#F5F5F7</color>
+    <color name="wdr_surface">#FFFFFF</color>
+    <color name="wdr_textPrimary">#1C1C1E</color>
+    <color name="wdr_textSecondary">#545458</color>
+    <color name="wdr_accent">#0040DD</color>
+    <color name="wdr_good">#00754C</color>
+    <color name="wdr_warn">#8A5A00</color>
+    <color name="wdr_error">#C0262B</color>
+    <color name="wdr_free">#6E6E73</color>
+    <color name="wdr_pro">#9A5B00</color>
+</resources>
