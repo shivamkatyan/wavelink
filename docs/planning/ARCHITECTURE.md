@@ -28,7 +28,7 @@ One QUIC connection; reliable control stream(s) with explicit response timeout a
 Platform-touching dependencies behind trait adapters: `CaptureSource`, `RenderSink`, `Discovery`, `PairingUi` (SAS/QR), `EntitlementProvider`, `Clock`, `PermissionGate`, `Storage` (secure). Adapters expose format metadata, bounded queues, overflow/underflow policy, latency metrics, lifecycle cancellation.
 
 ## Threading / real-time (P1 review findings folded in)
-- Platform RT callbacks may only copy in/out of SPSC rings (preallocated pool sized ~2× worst-case in-flight); aborts on allocation in RT context (`panic="abort"`, deny `alloc`/`log` in RT codegen).
+- Platform RT callbacks may only copy in/out of SPSC rings (preallocated pool sized ~2× worst-case in-flight). Allocation/lock guards in RT context (`panic="abort"`, deny `alloc`/`log` in RT codegen) are specified in RT_CONTRACT.md §4 but **not yet implemented** — today the contract is enforced by construction (the ring API is no-alloc/no-lock/no-syscall) and by the per-platform whitelist tables.
 - Encode/decode/resample/encrypt/transport on dedicated thread-pinned workers with worst-case budgets (not average).
 - Per-platform callback allowed-operation whitelist table authored during B0 (`docs/planning/ADRS/ADR-002.md` + `core/rt/` docs).
 - WSL2 simulation cannot satisfy the native real-time evidence gate; Linux RT evidence only from real PipeWire/RTKit runs (self-hosted native runner or lab).

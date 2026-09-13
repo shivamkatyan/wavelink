@@ -29,26 +29,42 @@ work per callback mechanically enumerable and testable.
 
 ## 3. Thread handoff
 - **Capture side:** RT capture callback = producer → `SpscRing.try_push`; a
-  dedicated worker consumer drains (`worker_drain`), then runs encode/encrypt/
-  transport.
-- **Render side:** a dedicated worker producer fills (`worker_fill`) from decode/
-  jitter-buffer; RT render callback = consumer → `SpscRing.try_pop_exact`.
+  dedicated worker consumer drains the ring (`try_pop_exact`), then runs
+  encode/encrypt/transport.
+- **Render side:** a dedicated worker producer fills the ring (`try_push`) from
+  decode/jitter-buffer; RT render callback = consumer → `SpscRing.try_pop_exact`.
 - Ring is **lock-free SPSC**; buffer pool sized ≥ 2× worst-case in-flight (see
   ADR-007 sizing inequalities). `SpscRing::with_capacity` allocates once, off-RT.
 
 ## 4. Enforcement (not just prose)
-- RT crates compiled with `panic = "abort"`.
-- `wdr_rt` provides a `#[cfg(feature="rt-guard")]` global allocator that `abort()`s
-  on **any** allocation made while "in RT context" (a thread-local flag set by a
+
+### Implemented today (as of 0.0.1)
+- **By construction:** the RT-side surface is `SpscRing::try_push` /
+  `try_pop_exact` — only atomic loads/stores and byte copies on a slice
+  allocated exactly once in `with_capacity` (off-RT). No allocation, locks,
+  syscalls or blocking are expressible inside those calls, so a callback routed
+  through the ring cannot violate the whitelist without explicitly invoking
+  something outside it. The same holds for the macOS SCK row, whose RT handler
+  only copies into `backend::system_capture::PreallocatedCaptureBuffer::push_rt`.
+- **By contract + tests:** the allowed/forbidden tables above, plus
+  `cargo test -p wdr_rt` SPSC stress tests (overflow returns full; no data race
+  under a 2-thread producer/consumer hammer).
+
+### Specified, NOT yet implemented (honest gap — tracked as RISK_REGISTER R16)
+The mechanical guards below are the planned enforcement layer. None exists in
+the tree today (no `panic = "abort"` profile, no `rt-guard` feature, no
+`#[no_std]` in `wdr_rt`, no alloc/lint gate, CI is `if: false`). Land them here
+and reference this section from the commit that does:
+- RT crates compiled with `panic = "abort"` (profile per RT crate).
+- `wdr_rt` `#[cfg(feature="rt-guard")]` global allocator that `abort()`s on
+  **any** allocation made while "in RT context" (a thread-local flag set by a
   probe at callback entry) — catches accidental allocs in tests/native adapters.
 - Deny `alloc`/`log` symbols in the RT module surface via crate structure +
-  build-time lint (documented: `wdr_rt` is `#[no_std]`-friendly; the RT modules in
-  shells import only `wdr_rt`).
+  build-time lint (make `wdr_rt` `#[no_std]`-based; RT modules in shells import
+  only `wdr_rt`).
 - CI stress/instrumentation (a watchdog thread that aborts on callback stall +
   an alloc detector) per TEST_PLAN "instrumentation or stress tests that can detect
   callback allocation, blocking, priority inversion, excess duration".
-- `cargo test -p wdr_rt` includes an SPSC stress test (overflow returns full, no
-  data race under a 2-thread producer/consumer hammer).
 
 ## 5. Native evidence gate
 WSL2/Docker simulation **cannot** satisfy the native RT evidence gate. Linux RT

@@ -11,8 +11,8 @@
 //!
 //! * RT capture callback → `SpscRing::try_push` (producer half)
 //! * RT render callback  → `SpscRing::try_pop_exact` (consumer half)
-//! * worker threads drive the opposite halves via
-//!   [`worker_fill`](spsc::worker_fill) / [`worker_drain`](spsc::worker_drain)
+//! * worker threads drive the opposite halves — drain via `try_pop_exact`,
+//!   fill via `try_push` — entirely off the RT path
 //!
 //! `try_push` / `try_pop_exact` contain no allocation, no locks, no syscalls
 //! and no blocking — only atomic loads/stores on a preallocated slice — so they
