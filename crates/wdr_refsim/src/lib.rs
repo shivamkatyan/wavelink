@@ -31,6 +31,7 @@
 //! The lossless e2e tests assert `receiver hash == canonical golden` with
 //! tolerance-free equality.
 
+pub mod drift;
 pub mod emitter;
 pub mod framing;
 pub mod receiver;

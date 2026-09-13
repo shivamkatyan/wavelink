@@ -188,6 +188,36 @@ impl ResamplerI16 {
         self.step
     }
 
+    /// Re-target the ratio mid-stream (drift correction, WS-B): keeps the
+    /// carried interpolation state (`left`/`right`/`p`/`pending`) so a small
+    /// ratio change between updates does not click or reset the phase.
+    /// Off-RT only. Convenience for whole-Hz (u32) rate pairs.
+    pub fn retune(&mut self, input_rate: u32, output_rate: u32) -> Result<(), CodecError> {
+        if input_rate == 0 || output_rate == 0 {
+            return Err(CodecError::Backend(
+                "resampler: non-zero rate required in retune".into(),
+            ));
+        }
+        self.input_rate = input_rate;
+        self.output_rate = output_rate;
+        self.step = f64::from(input_rate) / f64::from(output_rate);
+        Ok(())
+    }
+
+    /// Re-target the ratio mid-stream at sub-ppm precision (drift correction).
+    /// `step` = input frames per output frame (≈1.0 ± tens of ppm). Whole-Hz
+    /// `retune` quantizes at ~1/48000 ≈ 21 ppm — far too coarse for drift, so
+    /// the drift estimator drives this directly. Same state-preserving
+    /// semantics as [`retune`](Self::retune); the `input_rate`/`output_rate`
+    /// fields keep their nominal values for introspection.
+    pub fn set_ratio(&mut self, step: f64) {
+        debug_assert!(
+            step > 0.0 && step.is_finite(),
+            "resampler: bad drift ratio {step}"
+        );
+        self.step = step;
+    }
+
     /// Configured input rate (Hz).
     pub const fn input_rate(&self) -> u32 {
         self.input_rate
@@ -377,5 +407,23 @@ mod tests {
         assert!(ResamplerI16::new(0, 48_000, 2).is_err());
         assert!(ResamplerI16::new(44_100, 0, 2).is_err());
         assert!(ResamplerI16::new(44_100, 48_000, 0).is_err());
+    }
+
+    #[test]
+    fn retune_and_set_ratio_retarget_mid_stream() {
+        let mut r = ResamplerI16::new(48_000, 48_000, 2).unwrap();
+        assert_eq!(r.ratio(), 1.0, "identity start");
+        // Whole-Hz retune (the WS-E/u32 seam).
+        r.retune(44_100, 48_000).unwrap();
+        let expected = 44_100.0 / 48_000.0;
+        assert!((r.ratio() - expected).abs() < 1e-12, "retune ratio");
+        assert_eq!(r.input_rate(), 44_100);
+        assert_eq!(r.output_rate(), 48_000);
+        // Sub-ppm set_ratio (the drift seam) keeps phase/state; values introspect.
+        r.set_ratio(1.0 + 40e-6);
+        assert!((r.ratio() - (1.0 + 40e-6)).abs() < 1e-12, "set_ratio precision");
+        // Invalid whole-Hz retune is rejected, state unchanged.
+        assert!(r.retune(0, 48_000).is_err());
+        assert!((r.ratio() - (1.0 + 40e-6)).abs() < 1e-12, "state preserved on error");
     }
 }

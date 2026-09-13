@@ -101,6 +101,18 @@ pub struct ReceiverMetrics {
     pub bytes_recv: u64,
 }
 
+/// Whether (and how) drift correction was applied on a run (FR-024; ADR-007).
+/// A corrected stream is **never bit-perfect** — `bit_exact` is honest about it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DriftReport {
+    /// A finite correction was engaged at least once (render is resampled).
+    pub applied: bool,
+    /// The correction applied at the end of the run, ppm (0 = identity).
+    pub final_ppm: f64,
+    /// True only when nothing was resampled — drift-free and bit-exact.
+    pub bit_exact: bool,
+}
+
 /// Final outcome of a receiver run.
 #[derive(Debug, Clone)]
 pub struct ReceiverOutcome {
@@ -109,6 +121,9 @@ pub struct ReceiverOutcome {
     pub hash: blake3::Hash,
     /// Frames actually rendered to the hash/render sink.
     pub frames_rendered: u64,
+    /// Drift correction report (None when drift correction was disabled —
+    /// the default, so goldens stay bit-exact).
+    pub drift: Option<DriftReport>,
 }
 
 impl ReceiverOutcome {
@@ -652,9 +667,14 @@ pub struct Receiver {
     expected_total: Option<u64>,
     ended: bool,
     stream_id: Option<u32>,
+    /// The receiver's arrival wall clock (shared with the render sink for
+    /// underrun accounting AND with the drift estimator for sampling).
+    clock: ClockHandle,
+    /// Optional WLS drift correction (None = disabled → goldens stay bit-exact).
+    drift: Option<crate::drift::DriftEstimator>,
 }
 
-// (manual `Debug` impl below skips the non-`Debug` codec adapter)
+// (manual `Debug` impl below skips the non-`Debug` codec adapter + estimator)
 
 impl fmt::Debug for Receiver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -663,6 +683,7 @@ impl fmt::Debug for Receiver {
             .field("metrics", &self.metrics)
             .field("queued", &self.buffer.len())
             .field("ended", &self.ended)
+            .field("drift_enabled", &self.drift.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -680,13 +701,15 @@ impl Receiver {
             buffer: JitterBuffer::new(profile.reorder_window(), profile.queue_cap()),
             profile,
             adapter: Some(adapter),
-            render: Box::new(NullRenderSink::new(clock, max_gap_ms)),
+            render: Box::new(NullRenderSink::new(clock.clone(), max_gap_ms)),
             meta,
             format_sent: false,
             metrics: ReceiverMetrics::default(),
             expected_total: None,
             ended: false,
             stream_id: None,
+            clock,
+            drift: None,
         })
     }
 
@@ -695,6 +718,52 @@ impl Receiver {
     pub fn set_render_sink(&mut self, sink: Box<dyn RenderSink>) {
         self.render = sink;
         self.format_sent = false;
+    }
+
+    /// Enable WLS drift correction (FR-024 / ADR-007) on the i16 canonical
+    /// lane. Refused for a bit-exact 24-bit lane (i24 is never resampled).
+    /// Off by default, so goldens run drift-free and stay byte-identical.
+    pub fn enable_drift(&mut self, cfg: crate::drift::DriftConfig) -> Result<(), ReceiverError> {
+        if self.meta.sample_repr != SampleRepr::I16 {
+            return Err(ReceiverError::Internal(
+                "drift correction applies only to the i16 canonical lane (i24 is bit-exact)".into(),
+            ));
+        }
+        self.drift = Some(crate::drift::DriftEstimator::new(cfg, self.meta.channels));
+        Ok(())
+    }
+
+    /// Canonicalize a decoded block into the render seam's canonical byte form
+    /// (i16 = 2 LE bytes, i24 = low-3 LE bytes), applying drift correction on
+    /// i16 lanes when enabled: sample the (media_ts, arrival) pair and
+    /// bounded-resample the decoded block at the estimated ratio *before*
+    /// canonicalization.
+    fn canonicalize_with_drift(&mut self, decoded: &DecodedPcm, media_ts: u64, out: &mut Vec<u8>) {
+        if let Some(drift) = &mut self.drift {
+            if let DecodedPcm::I16(s) = decoded {
+                drift.sample_frame(media_ts, self.clock.now_ms());
+                let mut resampled = Vec::with_capacity(s.len());
+                drift.process_frame(s, &mut resampled);
+                for &v in &resampled {
+                    out.extend_from_slice(&v.to_le_bytes());
+                }
+                return;
+            }
+            // I24Packed lanes never carry drift (enable_drift refuses them);
+            // fall through to the plain canonical form (bit-exact).
+        }
+        match decoded {
+            DecodedPcm::I16(s) => {
+                for &v in s.iter() {
+                    out.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+            DecodedPcm::I24(s) => {
+                for &v in s.iter() {
+                    out.extend_from_slice(&v.to_le_bytes()[..3]);
+                }
+            }
+        }
     }
 
     pub fn metrics(&self) -> &ReceiverMetrics {
@@ -844,21 +913,7 @@ impl Receiver {
                 },
             };
             let mut canonical = Vec::with_capacity(decoded.canonical_len());
-            match &decoded {
-                // Canonical i16 = 2 LE bytes/sample.
-                DecodedPcm::I16(s) => {
-                    for &v in s.iter() {
-                        canonical.extend_from_slice(&v.to_le_bytes());
-                    }
-                }
-                // Canonical i24 = low-3 LE bytes/sample, sign-extended decode
-                // already applied — byte-identical to the fixture packing.
-                DecodedPcm::I24(s) => {
-                    for &v in s.iter() {
-                        canonical.extend_from_slice(&v.to_le_bytes()[..3]);
-                    }
-                }
-            }
+            self.canonicalize_with_drift(&decoded, frame.media_ts, &mut canonical);
             // Render through the seam: the null device hashes + counts
             // underruns internally; a real sink plays the bytes.
             if self.render.on_block(&canonical).is_err() {
@@ -884,6 +939,11 @@ impl Receiver {
                 .integrity_hash()
                 .unwrap_or_else(|| blake3::hash(&[])),
             frames_rendered: self.metrics.packets_recv,
+            drift: self.drift.as_ref().map(|d| DriftReport {
+                applied: d.corrected(),
+                final_ppm: d.applied_ppm(),
+                bit_exact: !d.corrected(),
+            }),
         }
     }
 }
@@ -976,5 +1036,144 @@ mod tests {
             let _ = jb.push(frame(s));
             assert!(jb.len() <= 4, "queue bounded at cap");
         }
+    }
+
+    // ---- WS-B drift integration (FR-024 / ADR-007) ----
+
+    /// Raw PCM payload for 512 samples/channel (deterministic, no FLAC
+    /// block-size subtlety): exact round-trip, valid per-frame CRC via
+    /// `Frame::new_lossless`.
+    fn pcm_frame_payload(channels: u16) -> Vec<u8> {
+        use wdr_codec::{CodecAdapter, PcmAdapter};
+        let samples: Vec<i16> = (0..512 * usize::from(channels))
+            .map(|i| ((((i * 37) % 4096) as i64) - 2048) as i16)
+            .collect();
+        PcmAdapter::new(channels)
+            .expect("PCM adapter")
+            .encode(&samples)
+            .expect("PCM encode")
+            .to_vec()
+    }
+
+    #[test]
+    fn drift_off_by_default_reports_none_and_renders_cleanly() {
+        let meta = BufferMeta {
+            codec: Codec::Pcm,
+            sample_rate: 48_000,
+            channels: 2,
+            sample_repr: SampleRepr::I16,
+            channel_layout: ChannelLayout::Stereo,
+            frame_samples: 512,
+        };
+        let mut rx = Receiver::for_stream(
+            meta,
+            BufferProfile::Balanced,
+            ClockHandle::injectable(10_000),
+            0,
+        )
+        .unwrap();
+        let payload = pcm_frame_payload(2);
+        for (i, ts) in [0u64, 512].into_iter().enumerate() {
+            rx.ingest_frame_direct(Frame::new_lossless(
+                7,
+                i as u64,
+                ts,
+                Codec::Pcm,
+                48_000,
+                SampleRepr::I16,
+                ChannelLayout::Stereo,
+                512,
+                FrameFlags::default(),
+                payload.clone(),
+            ))
+            .unwrap();
+        }
+        let out = rx.finalize();
+        assert!(out.drift.is_none(), "drift disabled by default");
+        assert_eq!(out.metrics.packets_recv, 2);
+        assert_eq!(out.metrics.malformed, 0);
+    }
+
+    #[test]
+    fn drift_applies_correction_under_skewed_clock_and_reports_not_bit_exact() {
+        let meta = BufferMeta {
+            codec: Codec::Pcm,
+            sample_rate: 48_000,
+            channels: 2,
+            sample_repr: SampleRepr::I16,
+            channel_layout: ChannelLayout::Stereo,
+            frame_samples: 512,
+        };
+        let clock = ClockHandle::injectable(10_000);
+        let mut rx = Receiver::for_stream(meta, BufferProfile::Balanced, clock.clone(), 0).unwrap();
+        let cfg = crate::drift::DriftConfig {
+            update_interval_ms: 100, // every 10 frames at the 10 ms cadence below
+            prefill_frames: 20,
+            max_est_ppm: 20_000.0, // 4000 ppm injected, within range
+            ..Default::default()
+        };
+        rx.enable_drift(cfg).expect("enable drift (i16 lane)");
+
+        let payload = pcm_frame_payload(2);
+        // Dense arrival staircase: 4000 ppm over 2000 frames makes an arrival
+        // bump every ~25 frames, so the WLS sees a genuine source-drift slope
+        // (not a MAD-rejected outlier) well above the 1 ms clock granularity.
+        // Advance by the truncated *cumulative* time (like a real wall clock),
+        // not by rounding each per-frame delta — rounding each +10.04 ms frame
+        // to 10 would erase the skew entirely.
+        let skew = 4_000.0;
+        let mut prev_ms = 10_000u64;
+        let n = 2_000usize;
+        for i in 0..n {
+            let cur_ms = (10_000.0 + i as f64 * 10.0 * (1.0 + skew * 1e-6)) as u64;
+            let step = cur_ms.saturating_sub(prev_ms);
+            if step > 0 {
+                clock.advance_ms(step);
+            }
+            prev_ms = cur_ms;
+            rx.ingest_frame_direct(Frame::new_lossless(
+                7,
+                i as u64,
+                (i as u64) * 480, // clean 10 ms cadence for the WLS sampling
+                Codec::Pcm,
+                48_000,
+                SampleRepr::I16,
+                ChannelLayout::Stereo,
+                512,
+                FrameFlags::default(),
+                payload.clone(),
+            ))
+            .unwrap();
+        }
+        let out = rx.finalize();
+        let report = out.drift.expect("drift enabled → report present");
+        assert!(report.applied, "a skewed clock must engage a correction");
+        assert!(!report.bit_exact, "drift-corrected is never bit-perfect");
+        assert!(report.final_ppm > 0.0, "slow source → positive ppm");
+        assert_eq!(out.metrics.packets_recv, n as u64);
+        assert_eq!(out.metrics.malformed, 0);
+    }
+
+    #[test]
+    fn drift_is_refused_on_bit_exact_24bit_lane() {
+        let meta = BufferMeta {
+            codec: Codec::Flac,
+            sample_rate: 48_000,
+            channels: 2,
+            sample_repr: SampleRepr::I24Packed,
+            channel_layout: ChannelLayout::Stereo,
+            frame_samples: 512,
+        };
+        let mut rx = Receiver::for_stream(
+            meta,
+            BufferProfile::Balanced,
+            ClockHandle::injectable(10_000),
+            0,
+        )
+        .unwrap();
+        assert!(
+            rx.enable_drift(Default::default()).is_err(),
+            "i24 is bit-exact — drift correction must be refused"
+        );
     }
 }
