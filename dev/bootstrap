@@ -96,6 +96,22 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 3.5 cargo-ndk + Android Rust targets (WS-G bridge .so build; idempotent)
+# ---------------------------------------------------------------------------
+if command_exists cargo; then
+    if command_exists cargo-ndk; then
+        info "cargo-ndk already present."
+    else
+        info "Installing cargo-ndk 4.1.2 (pinned; cargo-ndk bridge tooling, WS-G)."
+        cargo install cargo-ndk --version 4.1.2 --locked \
+            || warn "cargo-ndk install failed; the android-ci gate installs it."
+    fi
+    info "Adding Android Rust cross targets (aarch64/armv7/x86_64, idempotent)."
+    rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android \
+        || warn "rustup target add (android) failed; the android-ci gate adds them."
+fi
+
+# ---------------------------------------------------------------------------
 # 4. Write dev/env.sh and recap
 # ---------------------------------------------------------------------------
 cat > "$DEV_DIR/env.sh" <<'EOF'

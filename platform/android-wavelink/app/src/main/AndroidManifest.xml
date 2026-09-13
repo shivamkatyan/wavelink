@@ -11,6 +11,10 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/WDRTheme"
         android:supportsRtl="true">
+        <!-- WS-G (BRIDGE_PLAN step 1): the Rust bridge .so is packaged when the
+             android-ci gate builds it; required=false keeps the app fully
+             functional on host builds without the library. -->
+        <uses-native-library android:name="libwdr_bridge.so" android:required="false" />
         <service android:name=".emitter.EmitterService" android:exported="false" android:foregroundServiceType="mediaProjection" />
         <service android:name=".receiver.ReceiverService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
         <activity android:name=".RoleLauncherActivity" android:exported="true">

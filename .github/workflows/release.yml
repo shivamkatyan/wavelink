@@ -91,6 +91,24 @@ jobs:
             "$SDKM" --sdk_root="$ANDROID_HOME" "platforms;android-34" "build-tools;34.0.0"
           fi
 
+      - name: Rust + cargo-ndk + NDK (WS-G bridge .so — android-ci gate)
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+          cargo install cargo-ndk --version 4.1.2 --locked
+          # Pin the NDK matching app/build.gradle.kts ndkVersion; the cargoNdkBuild
+          # task builds libwdr_bridge.so into jniLibs from this.
+          SDKM="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKM" ]; then
+            "$SDKM" --sdk_root="$ANDROID_HOME" "ndk;27.0.12077973"
+            echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          else
+            echo "::warning::sdkmanager not found; cargoNdkBuild will skip and the\
+ .so will be absent from the artifact (WdrEngineLoader tolerates it)."
+          fi
+
       - name: Package Android builds (assemble + sign)
         shell: bash
         run: bash scripts/package/android.sh

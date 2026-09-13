@@ -15,6 +15,13 @@ android {
         versionName = "0.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // WS-G (BRIDGE_PLAN step 1): the Rust bridge ships arm64-v8a /
+        // armeabi-v7a / x86_64 in jniLibs (produced by the cargoNdkBuild task);
+        // the ABIs are pinned so packaging is deterministic.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -33,6 +40,49 @@ android {
         // which the Kotlin Gradle plugin rejects ("Unknown Kotlin JVM target").
         jvmTarget = "17"
     }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+}
+
+// WS-G (BRIDGE_PLAN step 1): build libwdr_bridge.so for the pinned ABIs via
+// cargo-ndk into src/main/jniLibs. Skips with a warning when no NDK /
+// cargo-ndk is available, so host `assembleDebug` builds green without them;
+// the android-ci release job provides both and produces the real .so.
+val cargoNdkBuild = tasks.register<Exec>("cargoNdkBuild") {
+    val ndkHomeSet = !System.getenv("ANDROID_NDK_HOME").isNullOrEmpty()
+            || !System.getenv("NDK_HOME").isNullOrEmpty()
+    val cargoNdkPresent = runCatching {
+        ProcessBuilder("cargo", "ndk", "--version")
+            .redirectErrorStream(true)
+            .start()
+            .let { it.waitFor(); it.exitValue() == 0 }
+    }.getOrDefault(false)
+    enabled = ndkHomeSet && cargoNdkPresent
+    doFirst {
+        if (!enabled) {
+            logger.warn(
+                "cargoNdkBuild skipped (cargo-ndk=$cargoNdkPresent, NDK env=$ndkHomeSet). " +
+                        "Host assembleDebug ships without libwdr_bridge.so; the android-ci " +
+                        "gate builds it (WdrEngineLoader tolerates its absence)."
+            )
+        }
+    }
+    if (enabled) {
+        workingDir = rootProject.projectDir.resolve("../../")
+        commandLine(
+            "cargo", "ndk",
+            "-t", "arm64-v8a", "-t", "armeabi-v7a", "-t", "x86_64",
+            "-o", "${projectDir}/src/main/jniLibs",
+            "build", "--release", "-p", "wdr_bridge",
+        )
+    }
+}
+tasks.named("preBuild") {
+    dependsOn(cargoNdkBuild)
 }
 
 dependencies {

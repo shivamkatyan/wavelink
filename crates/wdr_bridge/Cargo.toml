@@ -1,0 +1,33 @@
+# WDR Android Rust-in-app FFI bridge (BRIDGE_PLAN step 1, WS-G).
+#
+# A uniffi control-plane surface over wdr_refsim's QuicAudioSink so the
+# Android/iOS shells can drive the real streaming engine in-app. ADR-001/002:
+# control-plane only — no RT render callbacks ever cross FFI (the Android
+# MediaProjection capture queue is a normal worker thread; the on_block member
+# is documented as never being a realtime callback).
+#
+# The crate builds as a normal `lib` for host tests AND a `cdylib` (the
+# `libwdr_bridge.so` / `.dylib` the app + uniffi-generated Kotlin load). The
+# real .so for android ABIs is produced by `cargo-ndk` in the Android CI gate
+# (host proof runs in-process, no NDK required).
+
+[package]
+name = "wdr_bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Android/iOS Rust-in-app FFI bridge: uniffi control-plane over wdr_refsim (BRIDGE_PLAN step 1)."
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+uniffi = { version = "=0.32.0", features = ["build"] }
+wdr_crypto = { path = "../wdr_crypto" }
+wdr_refsim = { path = "../wdr_refsim" }
+wdr_entitlement = { path = "../wdr_entitlement" }
+wdr_proto = { path = "../wdr_proto" }
+
+[dev-dependencies]
+wdr_fakes = { path = "../wdr_fakes" }
