@@ -18,9 +18,10 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use wdr_entitlement::provider::Tier;
+use wdr_fakes::source::unpack_i24;
 use wdr_proto::{ChannelLayout, Codec, SampleRepr};
 
-use crate::emitter::{lane_and_meta, policy_gate, wire_meta, Emitter, EmitterError};
+use crate::emitter::{lane_and_meta, policy_gate, wire_meta_repr, Emitter, EmitterError};
 use crate::receiver::{BufferProfile, ReceiverError, ReceiverOutcome};
 
 /// Stable capture/format metadata delivered once (the Android
@@ -45,8 +46,9 @@ pub struct SinkFormat {
 pub trait AudioFrameSink {
     /// Called once, before the first block, when the capture format is stable.
     fn on_format(&mut self, fmt: SinkFormat) -> Result<(), SinkError>;
-    /// One captured PCM block (interleaved i16 LE bytes, any size). The sink
-    /// accumulates to whole codec frames (`frame_samples × channels` values).
+    /// One captured PCM block (canonical LE bytes: 2 bytes/sample for i16,
+    /// low-3-bytes for i24 — any size). The sink accumulates to whole codec
+    /// frames (`frame_samples × channels` values).
     fn on_block(&mut self, bytes: &[u8]) -> Result<(), SinkError>;
     /// Flush accumulation and send the end-of-stream marker; no calls after.
     /// A partial tail (< one whole frame) is dropped and reported through the
@@ -220,6 +222,9 @@ pub struct QuicAudioSink {
     rt: tokio::runtime::Runtime,
     emitter: Emitter,
     codec: Codec,
+    /// Current wire sample representation (i16 by default; I24Packed on the
+    /// 24-bit live lane). Determines the canonical byte stride on `on_block`.
+    sample_repr: SampleRepr,
     /// Current wire sample rate (48k for Opus-resampled; delivered for the
     /// 44.1/48k Opus and all lossless lanes).
     wire_rate: u32,
@@ -248,6 +253,30 @@ impl SinkFormat {
             sample_repr: SampleRepr::I16,
             channel_layout: ChannelLayout::Stereo,
         }
+    }
+
+    /// The canonical 24-bit capture format: I24Packed / 48 kHz / stereo — the
+    /// WS-A 24-bit live lane (3 canonical bytes/sample on the wire).
+    pub const fn canonical_24() -> Self {
+        SinkFormat {
+            sample_rate: crate::emitter::SIM_RATE_HZ,
+            channels: crate::emitter::SIM_CHANNELS,
+            sample_repr: SampleRepr::I24Packed,
+            channel_layout: ChannelLayout::Stereo,
+        }
+    }
+}
+
+/// The canonical wire byte width of a sample repr (bytes/sample on the
+/// `on_block` seam). Only the reprs the sink builds are valid (validated in
+/// [`validate_basic_format`]); the other reprs map to a typed error upstream.
+const fn wire_bytes_per_sample(repr: SampleRepr) -> usize {
+    match repr {
+        SampleRepr::I16 => 2,
+        SampleRepr::I24Packed => 3,
+        // F32/I32 are not buildable by this sink (validate_basic_format refuses
+        // them), so this branch is unreachable from a driven sink.
+        SampleRepr::F32 | SampleRepr::I32 => 0,
     }
 }
 
@@ -328,7 +357,7 @@ impl QuicAudioSink {
             .map_err(|e| SinkError::Send(format!("tokio runtime: {e}")))?;
         let conn = rt.block_on(dial_loopback(addr))?;
         let (kind, _) = lane_and_meta(codec != Codec::Opus, codec);
-        let meta = wire_meta(codec, plan.wire_rate, plan.frame_samples);
+        let meta = wire_meta_repr(codec, plan.wire_rate, plan.frame_samples, fmt.sample_repr);
         let emitter = Emitter::new_live(conn, kind, meta)?;
         let resampler = if plan.resampled {
             Some(wdr_codec::ResamplerI16::new(
@@ -343,6 +372,7 @@ impl QuicAudioSink {
             rt,
             emitter,
             codec,
+            sample_repr: fmt.sample_repr,
             wire_rate: plan.wire_rate,
             captured_rate: fmt.sample_rate,
             resampler,
@@ -401,8 +431,9 @@ impl QuicAudioSink {
     }
 }
 
-/// Shared structural validation (i16 / stereo) — the adapters are stereo/i16 at
-/// B0 (ADR-005). Rate policy is handled by [`wire_plan`].
+/// Shared structural validation (stereo; i16 or I24Packed). Rate policy is
+/// handled by [`wire_plan`]; the 24-bit lane rides only lossless codecs (Opus
+/// is i16-only, refused by the emitter's `build_adapter`).
 fn validate_basic_format(fmt: &SinkFormat) -> Result<(), SinkError> {
     if fmt.channels != 2 {
         return Err(SinkError::Format(format!(
@@ -410,9 +441,9 @@ fn validate_basic_format(fmt: &SinkFormat) -> Result<(), SinkError> {
             fmt.channels
         )));
     }
-    if fmt.sample_repr != SampleRepr::I16 {
+    if !matches!(fmt.sample_repr, SampleRepr::I16 | SampleRepr::I24Packed) {
         return Err(SinkError::Format(format!(
-            "unsupported sample repr {:?} (i16-only at B0, ADR-005)",
+            "unsupported sample repr {:?} (i16/i24 at B0, ADR-005)",
             fmt.sample_repr
         )));
     }
@@ -434,6 +465,7 @@ impl AudioFrameSink for QuicAudioSink {
             && plan.frame_samples == self.frame_samples
             && plan.resampled == self.resampler.is_some()
             && fmt.channels == self.channels
+            && fmt.sample_repr == self.sample_repr
         {
             return Ok(());
         }
@@ -443,9 +475,15 @@ impl AudioFrameSink for QuicAudioSink {
         // (re)create the worker resampler when the Opus lane now normalizes.
         let conn = self.emitter.conn_handle();
         let (kind, _) = lane_and_meta(self.codec != Codec::Opus, self.codec);
-        let meta = wire_meta(self.codec, plan.wire_rate, plan.frame_samples);
+        let meta = wire_meta_repr(
+            self.codec,
+            plan.wire_rate,
+            plan.frame_samples,
+            fmt.sample_repr,
+        );
         self.emitter = Emitter::new_live(conn, kind, meta)?;
         self.wire_rate = plan.wire_rate;
+        self.sample_repr = fmt.sample_repr;
         self.captured_rate = fmt.sample_rate;
         self.frame_samples = plan.frame_samples;
         self.values_per_frame = plan.frame_samples * fmt.channels as usize;
@@ -466,6 +504,8 @@ impl AudioFrameSink for QuicAudioSink {
         if let Some(rs) = &mut self.resampler {
             // Odd captured rate → push the resampled 48 kHz stream into the
             // codec accumulator (all off-RT; the resampler is stateful).
+            // The worker resampler is i16-only (lossy lane), so this branch
+            // never runs for the 24-bit lane.
             let input: Vec<i16> = bytes
                 .as_chunks::<2>()
                 .0
@@ -481,18 +521,46 @@ impl AudioFrameSink for QuicAudioSink {
             self.acc.extend_from_slice(bytes);
         }
 
-        let whole = self.values_per_frame * 2; // 2 bytes per i16 value
+        // Whole-frame boundary depends on the repr's canonical wire width:
+        // i16 = 2 bytes/sample, I24Packed = 3 bytes/sample (never conflated).
+        let spb = wire_bytes_per_sample(self.sample_repr);
+        let whole = self.values_per_frame * spb;
         while self.acc.len() >= whole {
             let rest = self.acc.split_off(whole);
-            let pcm: Vec<i16> = self
-                .acc
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|b| i16::from_le_bytes(*b))
-                .collect();
-            self.acc = rest;
-            self.rt.block_on(self.emitter.emit_pcm_frame(&pcm))?;
+            match self.sample_repr {
+                SampleRepr::I16 => {
+                    let pcm: Vec<i16> = self
+                        .acc
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|b| i16::from_le_bytes(*b))
+                        .collect();
+                    self.acc = rest;
+                    self.rt.block_on(self.emitter.emit_pcm_frame(&pcm))?;
+                }
+                SampleRepr::I24Packed => {
+                    // Canonical i24 block → i32 values (low-3-bytes,
+                    // sign-extended) exactly as the fixture packs them.
+                    let pcm: Vec<i32> = self
+                        .acc
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
+                        .map(|b| unpack_i24(b))
+                        .collect();
+                    self.acc = rest;
+                    self.rt.block_on(self.emitter.emit_pcm_frame_24(&pcm))?;
+                }
+                SampleRepr::F32 | SampleRepr::I32 => {
+                    // Unreachable from a driven sink: validate_basic_format
+                    // refuses these reprs. Typed error, never a silent guess.
+                    return Err(SinkError::Format(format!(
+                        "sample repr {:?} is not built by the sink (i16/i24)",
+                        self.sample_repr
+                    )));
+                }
+            }
         }
         Ok(())
     }

@@ -20,12 +20,11 @@
 //!
 //! # 24-bit status (explicit, ADR-005 "16/24-bit first")
 //!
-//! The FLAC adapter implements 16-bit only today (`FlacAdapter::new(.., 24)`
-//! returns `Unsupported`; `SampleRepr::I24Packed` is a stub) and `PcmAdapter`
-//! is i16-only. The 24-bit (i24-low-3-packed) cells are therefore reported as
-//! **PENDING** and this benchmark measures the i16 surface only, with an
-//! explicit note. 24-bit raw upper bounds are given analytically as notes, not
-//! measurements.
+//! Implemented since WS-A: `FlacAdapter::new(.., 24)` and `PcmAdapter::new24`
+//! drive the `CodecAdapter24` surface (i24 = low-3-byte packed, 3 canonical
+//! bytes/sample). The `--matrix` pass measures both bit depths: i16 at
+//! {240, 512, 1024} and i24 at {240, 512} (512 is the incompressible FLAC
+//! ceiling there too; see the notes row).
 //!
 //! # Real-music corpus (explicit)
 //!
@@ -39,10 +38,10 @@ use std::time::{Duration, Instant};
 
 use criterion::{criterion_group, Criterion, Throughput};
 
-use wdr_codec::adapters::{CodecAdapter, FlacAdapter, PcmAdapter};
+use wdr_codec::adapters::{CodecAdapter, CodecAdapter24, FlacAdapter, PcmAdapter};
 use wdr_codec::size::MAX_FRAME_PAYLOAD;
 use wdr_codec::CodecKind;
-use wdr_fakes::source::{ChannelKind, Fixture, FixtureKind, PcmSource, SampleFormat};
+use wdr_fakes::source::{unpack_i24, ChannelKind, Fixture, FixtureKind, PcmSource, SampleFormat};
 
 const RATES: &[u32] = &[44_100, 48_000];
 const CHANNELS: u16 = 2;
@@ -156,6 +155,69 @@ fn make_decoder(codec: CodecKind, rate: u32) -> Box<dyn CodecAdapter> {
     }
 }
 
+/// True i24 (low-3-byte) incompressible fixture derived from the documented
+/// splitmix32 seed the i16 worst case uses — `<<8` keeps every value inside the
+/// i24 clamp. The entropy is 16-bit (noted in the matrix); the byte layout is
+/// the real 3-bytes/sample packing.
+fn noise_i24(frame_size: usize) -> Vec<i32> {
+    noise_i16(frame_size)
+        .into_iter()
+        .map(|v| i32::from(v) << 8)
+        .collect()
+}
+
+/// i24 frame cell: the deterministic `wdr_fakes` I24 fixture (low-3-byte
+/// packed → i32 values), or the derived i24 noise worst case.
+fn cell_frame_24(cell: &Cell<'_>, rate: u32, frame_size: usize) -> Vec<i32> {
+    match cell {
+        Cell::WdrFakes(kind, _) => {
+            let total = (frame_size * usize::from(CHANNELS)) as u64;
+            let mut fx = Fixture::new(
+                (*kind).clone(),
+                SampleFormat::I24,
+                rate,
+                ChannelKind::Stereo,
+                total,
+            );
+            let got = fx.next_chunk((frame_size * usize::from(CHANNELS)) as u32);
+            assert_eq!(
+                got.len,
+                frame_size * usize::from(CHANNELS),
+                "fixture total sample count"
+            );
+            got.bytes
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|b| unpack_i24(b))
+                .collect()
+        }
+        Cell::Noise(_) => noise_i24(frame_size),
+    }
+}
+
+fn make_encoder24(codec: CodecKind, rate: u32, block: usize) -> Box<dyn CodecAdapter24> {
+    match codec {
+        CodecKind::Flac => Box::new(
+            FlacAdapter::new(rate, CHANNELS, 24)
+                .expect("FLAC 24-bit adapter")
+                .with_block(block.max(1)),
+        ),
+        CodecKind::Pcm => Box::new(PcmAdapter::new24(CHANNELS).expect("PCM 24-bit adapter")),
+        CodecKind::Opus => unreachable!("Opus is out of scope for this benchmark"),
+    }
+}
+
+fn make_decoder24(codec: CodecKind, rate: u32) -> Box<dyn CodecAdapter24> {
+    match codec {
+        CodecKind::Flac => {
+            Box::new(FlacAdapter::new(rate, CHANNELS, 24).expect("FLAC 24-bit adapter"))
+        }
+        CodecKind::Pcm => Box::new(PcmAdapter::new24(CHANNELS).expect("PCM 24-bit adapter")),
+        CodecKind::Opus => unreachable!("Opus is out of scope for this benchmark"),
+    }
+}
+
 fn codec_tag(codec: CodecKind) -> &'static str {
     match codec {
         CodecKind::Flac => "Flac",
@@ -237,39 +299,81 @@ fn codec_benches(c: &mut Criterion) {
 }
 
 /// Deterministic per-frame p50/p99 matrix (a second, independent measurement
-/// of the same cells, cheap and stable). Emits TSV rows to stdout.
+/// of the same cells, cheap and stable). Emits TSV rows to stdout — one pass
+/// per bit depth (i16 at 240/512/1024 spc; i24 `CodecAdapter24` at 240/512).
 fn print_matrix() {
-    println!("### ADR-005 benchmark matrix (i16 stereo; synthetic corpus)");
+    println!("### ADR-005 benchmark matrix (synthetic corpus)");
     println!(
         "codec\trate_hz\tbits\tframe_size\tfixture\tout_bytes\tratio\tbps@rate\t\
          enc_p50_us\tenc_p99_us\tdec_p50_us\tdec_p99_us\talgo_delay_ms\tnote"
     );
+    for bits in [16_u16, 24_u16] {
+        matrix_pass(bits);
+    }
+    println!(
+        "notes: corpus=synthetic-only (no licensed real-music fixture; PENDING follow-up). \
+         i24 = CodecAdapter24 (low-3-byte packed), measured at 240/512 spc. \
+         noise-i16-incompressible = wdr_codec::noise_fixture (splitmix32, ADR-005 spot-check seed); \
+         noisy24 = the same seed mapped to i24 via <<8 (16-bit entropy, noted). \
+         pseudo-random-pcm = wdr_fakes ChaCha12 fixture, clipped (compresses more than true noise)."
+    );
+}
+
+/// One matrix pass for a bit depth (16 = i16 adapter surface; 24 = the
+/// `CodecAdapter24` i24 surface). Timing re-creates a fresh adapter per
+/// iteration (the real encode/decode path) over a precomputed cell frame.
+fn matrix_pass(bits: u16) {
+    let i24 = bits == 24;
+    let bytes_per_sample = if i24 { 3 } else { 2 };
+    let frame_sizes: &[usize] = if i24 {
+        &[BLOCK_DEFAULT, BLOCK_512]
+    } else {
+        &[BLOCK_DEFAULT, BLOCK_512, BLOCK_MAX]
+    };
     for codec in [CodecKind::Flac, CodecKind::Pcm] {
         for &rate in RATES {
-            for frame_size in [BLOCK_DEFAULT, BLOCK_512, BLOCK_MAX] {
+            for &frame_size in frame_sizes {
                 let delay_ms = frame_size as f64 / f64::from(rate) * 1e3;
                 for cell in cells() {
-                    let pcm = cell_frame(&cell, rate, frame_size);
                     let fname = cell.label();
                     let n = usize::from(CHANNELS) * frame_size;
-                    let raw_bytes = n * 2;
+                    let raw_bytes = n * bytes_per_sample;
 
-                    let mut enc = make_encoder(codec, rate, frame_size);
-                    let encoded = enc.encode(&pcm).expect("encode");
-                    let out_bytes = encoded.len();
-                    let ratio = out_bytes as f64 / raw_bytes as f64;
-                    let rate_f = f64::from(rate);
-                    let frames_per_sec = rate_f / frame_size as f64;
-                    let bps = out_bytes as f64 * frames_per_sec;
+                    // Precompute the cell frame once; encode once for the
+                    // output-size/ratio/bps numbers (fresh adapter per timing
+                    // iteration below).
+                    let (encoded, out_bytes, ratio, bps) = if i24 {
+                        let pcm = cell_frame_24(&cell, rate, frame_size);
+                        let mut enc = make_encoder24(codec, rate, frame_size);
+                        let encoded = enc.encode_24(&pcm).expect("encode_24").to_vec();
+                        let out = encoded.len();
+                        let bps = out as f64 * (f64::from(rate) / frame_size as f64);
+                        (encoded, out, out as f64 / raw_bytes as f64, bps)
+                    } else {
+                        let pcm = cell_frame(&cell, rate, frame_size);
+                        let mut enc = make_encoder(codec, rate, frame_size);
+                        let encoded = enc.encode(&pcm).expect("encode").to_vec();
+                        let out = encoded.len();
+                        let bps = out as f64 * (f64::from(rate) / frame_size as f64);
+                        (encoded, out, out as f64 / raw_bytes as f64, bps)
+                    };
 
                     // Encode timing (fresh adapter per iteration = real path).
                     let mut t_enc: Vec<f64> = Vec::with_capacity(MATRIX_ITERS as usize);
                     for _ in 0..MATRIX_ITERS {
-                        let mut a = make_encoder(codec, rate, frame_size);
                         let t0 = Instant::now();
-                        let out = a.encode(&pcm).expect("encode");
+                        if i24 {
+                            let pcm = cell_frame_24(&cell, rate, frame_size);
+                            let mut a = make_encoder24(codec, rate, frame_size);
+                            let out = a.encode_24(&pcm).expect("encode_24");
+                            black_box(out);
+                        } else {
+                            let pcm = cell_frame(&cell, rate, frame_size);
+                            let mut a = make_encoder(codec, rate, frame_size);
+                            let out = a.encode(&pcm).expect("encode");
+                            black_box(out);
+                        }
                         t_enc.push(t0.elapsed().as_secs_f64() * 1e6);
-                        black_box(out);
                     }
                     let enc_p50 = p50(&mut t_enc);
                     let enc_p99 = p99(&mut t_enc);
@@ -278,11 +382,17 @@ fn print_matrix() {
                     let (dec_p50, dec_p99, note) = if dec_feasible {
                         let mut t_dec: Vec<f64> = Vec::with_capacity(MATRIX_ITERS as usize);
                         for _ in 0..MATRIX_ITERS {
-                            let mut a = make_decoder(codec, rate);
                             let t0 = Instant::now();
-                            let d = a.decode(&encoded).expect("decode");
+                            if i24 {
+                                let mut a = make_decoder24(codec, rate);
+                                let d = a.decode_24(&encoded).expect("decode_24");
+                                black_box(d);
+                            } else {
+                                let mut a = make_decoder(codec, rate);
+                                let d = a.decode(&encoded).expect("decode");
+                                black_box(d);
+                            }
                             t_dec.push(t0.elapsed().as_secs_f64() * 1e6);
-                            black_box(d);
                         }
                         (p50(&mut t_dec), p99(&mut t_dec), "-")
                     } else {
@@ -293,7 +403,7 @@ fn print_matrix() {
                         "{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{:.0}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{}",
                         codec_tag(codec),
                         rate,
-                        BITS,
+                        bits,
                         frame_size,
                         fname,
                         out_bytes,
@@ -312,12 +422,6 @@ fn print_matrix() {
             }
         }
     }
-    println!(
-        "notes: corpus=synthetic-only (no licensed real-music fixture; PENDING follow-up). \
-         24-bit=PENDING (FlacAdapter/PcmAdapter are i16-only; I24Packed stub). \
-         noise-i16-incompressible = wdr_codec::noise_fixture (splitmix32, ADR-005 spot-check seed). \
-         pseudo-random-pcm = wdr_fakes ChaCha12 fixture, clipped to i16 (compresses more than true noise)."
-    );
 }
 
 criterion_group! {

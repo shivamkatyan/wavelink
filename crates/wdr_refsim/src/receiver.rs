@@ -24,7 +24,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use wdr_codec::{CodecAdapter, FlacAdapter, OpusAdapter, PcmAdapter};
+use wdr_codec::{CodecAdapter, CodecAdapter24, FlacAdapter, OpusAdapter, PcmAdapter};
 use wdr_proto::{Codec, Frame, FrameIntegrity, Integrity, SampleRepr, FRAME_VERSION};
 
 use crate::emitter::BufferMeta;
@@ -231,7 +231,33 @@ pub fn guard_frame(frame: &Frame) -> Result<(), ReceiverError> {
 }
 
 const fn supported_repr(r: SampleRepr) -> bool {
-    matches!(r, SampleRepr::I16)
+    matches!(r, SampleRepr::I16 | SampleRepr::I24Packed)
+}
+
+/// The codec adapter the receiver decodes with, keyed to the stream's sample
+/// representation. i16 drives the [`CodecAdapter`] surface; I24Packed drives
+/// the 24-bit [`CodecAdapter24`] surface (decode → i32, low-3-byte canonical).
+/// F32/I32 remain unbuilt at the receiver (a guard in `decoder_for`).
+enum Decoder {
+    I16(Box<dyn CodecAdapter>),
+    I24(Box<dyn CodecAdapter24>),
+}
+
+/// The decoded PCM payload, before canonicalization into wire bytes.
+enum DecodedPcm {
+    I16(Box<[i16]>),
+    I24(Box<[i32]>),
+}
+
+impl DecodedPcm {
+    /// Canonical-LE byte count the decoded samples will occupy on the render
+    /// seam (2 bytes/sample for i16, 3 for i24 — never conflated).
+    fn canonical_len(&self) -> usize {
+        match self {
+            DecodedPcm::I16(s) => s.len() * 2,
+            DecodedPcm::I24(s) => s.len() * 3,
+        }
+    }
 }
 
 /// Map a `wdr_proto::Codec` + metadata to a codec adapter instance, or a typed
@@ -267,6 +293,42 @@ pub fn codec_adapter_for(meta: BufferMeta) -> Result<Box<dyn CodecAdapter>, Rece
         ),
     };
     Ok(adapter)
+}
+
+/// Map metadata to the receiver's [`Decoder`], keyed to the sample repr. The
+/// i16 arm reuses [`codec_adapter_for`]; I24Packed builds the 24-bit adapter
+/// (FLAC/PCM only — Opus is i16-only, a typed error). F32/I32 are refused.
+fn decoder_for(meta: BufferMeta) -> Result<Decoder, ReceiverError> {
+    match meta.sample_repr {
+        SampleRepr::I16 => Ok(Decoder::I16(codec_adapter_for(meta)?)),
+        SampleRepr::I24Packed => {
+            let adapter: Box<dyn CodecAdapter24> = match meta.codec {
+                Codec::Flac => Box::new(
+                    FlacAdapter::new(meta.sample_rate, meta.channels, 24).map_err(|e| {
+                        ReceiverError::Decode {
+                            codec: "Flac24",
+                            what: e.to_string(),
+                        }
+                    })?,
+                ),
+                Codec::Pcm => Box::new(PcmAdapter::new24(meta.channels).map_err(|e| {
+                    ReceiverError::Decode {
+                        codec: "Pcm24",
+                        what: e.to_string(),
+                    }
+                })?),
+                Codec::Opus => {
+                    return Err(ReceiverError::UnsupportedCodec {
+                        codec: "Opus on a 24-bit lane (Opus is i16-only, ADR-004)".into(),
+                    });
+                }
+            };
+            Ok(Decoder::I24(adapter))
+        }
+        other => Err(ReceiverError::UnsupportedCodec {
+            codec: format!("sample repr {other:?}"),
+        }),
+    }
 }
 
 /// The bounded in-order jitter buffer.
@@ -576,9 +638,9 @@ impl RenderSink for NullRenderSink {
 pub struct Receiver {
     buffer: JitterBuffer,
     profile: BufferProfile,
-    // NOTE: `adapter` is a `dyn CodecAdapter` that is not `Debug`; the manual
-    // `Debug` impl below skips it, so no derive is possible on this struct.
-    adapter: Option<Box<dyn CodecAdapter>>,
+    // NOTE: `adapter` is a `Decoder` around a `dyn` codec that is not `Debug`;
+    // the manual `Debug` impl below skips it, so no derive is possible.
+    adapter: Option<Decoder>,
     /// The decoded-canonical-bytes consumer (null render device in the sim; a
     /// real desktop/mobile shell plugs its output sink in here). Boxed as the
     /// `RenderSink` seam so the receive half is injectable like the capture
@@ -613,7 +675,7 @@ impl Receiver {
         clock: ClockHandle,
         max_gap_ms: u64,
     ) -> Result<Self, ReceiverError> {
-        let adapter = codec_adapter_for(meta)?;
+        let adapter = decoder_for(meta)?;
         Ok(Self {
             buffer: JitterBuffer::new(profile.reorder_window(), profile.queue_cap()),
             profile,
@@ -763,18 +825,39 @@ impl Receiver {
             }
         }
         for frame in frames {
-            let decoded = match adapter.decode(&frame.payload) {
-                Ok(d) => d,
-                Err(_e) => {
-                    // Decode failure on a valid CRC'd frame is not a crash; it
-                    // is counted as malformed and the frame is skipped.
-                    self.metrics.malformed += 1;
-                    continue;
-                }
+            let decoded: DecodedPcm = match &mut adapter {
+                Decoder::I16(a) => match a.decode(&frame.payload) {
+                    Ok(d) => DecodedPcm::I16(d),
+                    Err(_e) => {
+                        // Decode failure on a valid CRC'd frame is not a crash;
+                        // it is counted as malformed and the frame is skipped.
+                        self.metrics.malformed += 1;
+                        continue;
+                    }
+                },
+                Decoder::I24(a) => match a.decode_24(&frame.payload) {
+                    Ok(d) => DecodedPcm::I24(d),
+                    Err(_e) => {
+                        self.metrics.malformed += 1;
+                        continue;
+                    }
+                },
             };
-            let mut canonical = Vec::with_capacity(decoded.len() * 2);
-            for &s in decoded.iter() {
-                canonical.extend_from_slice(&s.to_le_bytes());
+            let mut canonical = Vec::with_capacity(decoded.canonical_len());
+            match &decoded {
+                // Canonical i16 = 2 LE bytes/sample.
+                DecodedPcm::I16(s) => {
+                    for &v in s.iter() {
+                        canonical.extend_from_slice(&v.to_le_bytes());
+                    }
+                }
+                // Canonical i24 = low-3 LE bytes/sample, sign-extended decode
+                // already applied — byte-identical to the fixture packing.
+                DecodedPcm::I24(s) => {
+                    for &v in s.iter() {
+                        canonical.extend_from_slice(&v.to_le_bytes()[..3]);
+                    }
+                }
             }
             // Render through the seam: the null device hashes + counts
             // underruns internally; a real sink plays the bytes.
