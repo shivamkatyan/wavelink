@@ -23,7 +23,7 @@
 //! overlap — that is intended. Malformed-input coverage stays in the existing
 //! golden/roundtrip/properties suites.
 
-use wdr_codec::{CodecAdapter, CodecAdapter24, CodecError, FlacAdapter, PcmAdapter, SampleRepr};
+use wdr_codec::{CodecAdapter, CodecAdapter24, FlacAdapter, PcmAdapter, SampleRepr};
 use wdr_fakes::hash::HashSink;
 use wdr_fakes::source::{
     unpack_i24, ChannelKind, Fixture, FixtureKind, PcmSource, SampleFormat, Stereo,
@@ -570,14 +570,15 @@ fn assert_channel_order_preserved_24(
 /// and must keep returning a typed `Unsupported` — nothing below i16/i24 is
 /// claimable as verified.
 #[test]
-fn i24_implemented_and_f32_i32_still_stubs() {
+fn i24_implemented_and_f32_i32_declared() {
     assert!(matches!(SampleRepr::I24Packed.validate(), Ok(())));
-    assert!(matches!(
-        SampleRepr::F32.validate(),
-        Err(CodecError::Unsupported(_))
-    ));
-    assert!(matches!(
-        SampleRepr::I32.validate(),
-        Err(CodecError::Unsupported(_))
-    ));
+    // WS-E: F32/I32 are now implemented on the PCM adapter (raw IEEE-f32 /
+    // 32-bit-int passthrough); they validate as declared. FLAC stays 16/24 and
+    // gates that in its constructor (its decode range can't span ±2^31 in i32).
+    assert!(matches!(SampleRepr::F32.validate(), Ok(())));
+    assert!(matches!(SampleRepr::I32.validate(), Ok(())));
+    // The codec is honest per-constructor: PCM builds f32/i32, FLAC does not.
+    assert!(wdr_codec::adapters::PcmAdapter::new_f32(2).is_ok());
+    assert!(wdr_codec::adapters::PcmAdapter::new_i32(2).is_ok());
+    assert!(wdr_codec::adapters::FlacAdapter::new(48_000, 2, 32).is_err());
 }

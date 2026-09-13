@@ -61,20 +61,23 @@ impl core::fmt::Display for CodecKind {
     }
 }
 
-/// Sample representation for the codec path (mirrors PROTOCOL_SPEC/`
+/// Sample representation for the codec path (mirrors PROTOCOL_SPEC/
 /// `wdr_proto::SampleRepr`, kept local so `wdr_codec` stays decoupled at B0).
-/// `I16` and `I24Packed` are implemented (ADR-005 16/24-bit); `F32`/`I32`
-/// remain future stubs that return [`CodecError::Unsupported`].
+/// `I16`/`I24Packed` are implemented, and `F32`/`I32` are implemented on the
+/// PCM adapter (WS-E: raw IEEE-f32 / 32-bit-int passthrough). **Declared** here
+/// means the representation is buildable *somewhere* in the crate (the FLAC
+/// adapter refuses 32-bit int — its decode range check can't span ±2^31 with
+/// i32 — so FLAC stays 16/24 and that honesty lives in the constructor).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SampleRepr {
     /// 16-bit signed little-endian interleaved samples (implemented).
     I16,
-    /// 32-bit float — *future stub* (returns `Unsupported`).
+    /// 32-bit float (implemented on PCM; wire = 4-byte IEEE-754 LE).
     F32,
     /// 24-bit packed (3 bytes/sample) — implemented via [`CodecAdapter24`]
     /// (the canonical `wdr_fakes` i32-by-value / low-3-bytes form).
     I24Packed,
-    /// 32-bit signed integer — *future stub* (returns `Unsupported`).
+    /// 32-bit signed integer (implemented on PCM; wire = 4-byte LE).
     I32,
 }
 
@@ -91,17 +94,11 @@ impl SampleRepr {
     }
 
     /// Map the protocol-facing representation to a supported adapter
-    /// representation; the remaining stubs return `Unsupported`.
+    /// representation. F32/I32 are implemented on the PCM adapter (WS-E); the
+    /// FLAC adapter gates its supported depths in its constructor.
     pub fn validate(self) -> Result<(), CodecError> {
         match self {
-            SampleRepr::I16 => Ok(()),
-            SampleRepr::F32 => Err(CodecError::Unsupported(
-                "F32 sample representation is a future stub (ADR-005: 16/24-bit first)".into(),
-            )),
-            SampleRepr::I24Packed => Ok(()),
-            SampleRepr::I32 => Err(CodecError::Unsupported(
-                "I32 sample representation is a future stub (ADR-005)".into(),
-            )),
+            SampleRepr::I16 | SampleRepr::F32 | SampleRepr::I24Packed | SampleRepr::I32 => Ok(()),
         }
     }
 }
@@ -183,18 +180,17 @@ mod tests {
     }
 
     #[test]
-    fn sample_repr_implemented_vs_stubs() {
-        assert!(matches!(SampleRepr::I16.validate(), Ok(())));
-        // 24-bit is implemented via `CodecAdapter24` (ADR-005 follow-up).
-        assert!(matches!(SampleRepr::I24Packed.validate(), Ok(())));
-        assert!(matches!(
-            SampleRepr::F32.validate(),
-            Err(CodecError::Unsupported(_))
-        ));
-        assert!(matches!(
-            SampleRepr::I32.validate(),
-            Err(CodecError::Unsupported(_))
-        ));
+    fn sample_repr_declared_and_pcm_buildable() {
+        // I16/I24 implemented; F32/I32 now implementable on the PCM adapter
+        // (WS-E) — the FLAC adapter still gates 16/24 in its constructor.
+        for r in [
+            SampleRepr::I16,
+            SampleRepr::F32,
+            SampleRepr::I24Packed,
+            SampleRepr::I32,
+        ] {
+            assert!(matches!(r.validate(), Ok(())));
+        }
     }
 
     #[test]
