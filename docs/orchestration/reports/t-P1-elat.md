@@ -122,3 +122,34 @@ git -C /home/shivam/ps diff --stat           # 3 files, 1 new + 1 appended row +
 ## Blockers
 
 None. Workspace remained green; only the 3 allowed paths were written.
+
+---
+
+# Host reference-loopback latency — p50/p95/p99 re-measure (2026-09-14, simulated)
+
+Re-run driven by `scripts/verify/latency-host-loopback.sh`:
+`wdr_refsim --example latprobe` times `QuicAudioSink → QuicRenderReceiver`
+per frame over quinn loopback (FLAC i16/48k stereo, 512 spc), 5 runs × 256
+frames per profile. **Simulated / upper-bound** — no physical DAC; device-SLO
+probes (Balanced ≤150 ms, Low ≤80 ms, start ≤3 s) stay device-gated. The
+first-frame row is the host 'publish → first render' upper bound; recovery ≤5 s
+is proven by the wdr_session reconnect/backoff FSM (FR-025), not this loopback.
+
+### `balanced`
+```
+  first_frame_to_render_ms: p50=53.044 p95=53.795 p99=53.795 (5 runs)
+  per_frame_latency_ms:    p50=30.786 p95=58.318 p99=60.610 (n=1280)
+```
+
+### `low`
+```
+  first_frame_to_render_ms: p50=51.430 p95=51.548 p99=51.548 (5 runs)
+  per_frame_latency_ms:    p50=24.917 p95=55.425 p99=58.452 (n=1280)
+```
+
+### `resilient`
+```
+  first_frame_to_render_ms: p50=51.970 p95=53.598 p99=53.598 (5 runs)
+  per_frame_latency_ms:    p50=25.757 p95=57.535 p99=60.180 (n=1280)
+```
+
