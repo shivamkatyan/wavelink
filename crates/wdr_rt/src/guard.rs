@@ -38,6 +38,7 @@
 //! ```
 
 use std::cell::Cell;
+use std::thread_local;
 
 // Whether the calling thread is currently inside an RT callback context.
 // Const-initialized `#[thread_local]` storage (no lazy-init allocation) so
@@ -128,6 +129,8 @@ impl Drop for RtGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // no_std crate: bring the std prelude (Vec/Box/String/…) into the tests.
+    use std::prelude::v1::*;
 
     #[test]
     fn out_of_rt_context_allocation_is_unaffected() {
