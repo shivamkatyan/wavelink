@@ -61,16 +61,20 @@ struct Args {
     /// service by DNS (`receiver-sim`), so this is kept as a string and
     /// resolved at dial time.
     addr: String,
+    /// Browse `_wdr._tcp` (FR-003, ADR-006) instead of using a hard-coded
+    /// address; falls back to `addr` when no peer resolves in the window.
+    discover: bool,
 }
 
 fn usage() -> &'static str {
     "usage: ref_emitter --role emitter --lossy|--lossless [--codec opus|flac|pcm]\n\
      \t[--source pseudo-random|silence|impulse|full-scale|sine|channel-left|channel-right]\n\
-     \t[--seconds N] [--buffer low|balanced|resilient] [<receiver-addr>]\n\
+     \t[--seconds N] [--buffer low|balanced|resilient] [--discover] [<receiver-addr>]\n\
      env:  WDR_SIM_ROLE=emitter  WDR_METRICS_DIR=<dir>  WDR_NETEM_PROFILE=<profile>\n\
      \tWDR_ENT_TIER=free|pro (default free; --lossless under free is refused)\n\
      \tWDR_CC=cubic|bbr (default cubic; congestion controller for the t-P1-cc spike)\n\
-     \tWDR_EMITTER_ADDR=<addr> (default 127.0.0.1:9000)"
+     \tWDR_EMITTER_ADDR=<addr> (default 127.0.0.1:9000)\n\
+     \tWDR_DISCOVERY_TIMEOUT_SECS=<n> (default 5; bounded --discover browse window)"
 }
 
 fn parse_source(s: &str) -> Result<wdr_fakes::source::FixtureKind, String> {
@@ -107,6 +111,7 @@ fn parse_args() -> Result<Args, String> {
     let mut fixture = wdr_fakes::source::FixtureKind::PseudoRandomPcm;
     let mut total_samples = seconds_to_samples(2.0);
     let mut _buffer = BufferProfile::Balanced;
+    let mut discover = false;
     let mut positional = Vec::new();
 
     let mut it = std::env::args().skip(1);
@@ -129,6 +134,7 @@ fn parse_args() -> Result<Args, String> {
                 let v = it.next().ok_or("--buffer needs a value")?;
                 _buffer = BufferProfile::parse(&v)?;
             }
+            "--discover" => discover = true,
             "--help" | "-h" => return Err(usage().to_string()),
             other if other.starts_with('-') => {
                 return Err(format!("unknown option '{other}'; {}", usage()));
@@ -176,13 +182,30 @@ fn parse_args() -> Result<Args, String> {
         total_samples,
         buffer: _buffer,
         addr,
+        discover,
     })
+}
+
+/// Browse `_wdr._tcp` (FR-003, ADR-006) for a receiver to dial, bounded by
+/// `WDR_DISCOVERY_TIMEOUT_SECS` (default 5). Returns `None` → caller falls
+/// back to the explicit address (never sleep-and-assume).
+fn discover_target() -> Option<String> {
+    let wait_secs = std::env::var("WDR_DISCOVERY_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(5);
+    eprintln!("[ref_emitter] browsing `_wdr._tcp` ({wait_secs}s WDR_DISCOVERY_TIMEOUT_SECS)…");
+    match wdr_discovery::browse(std::time::Duration::from_secs(wait_secs), 1) {
+        Ok(peers) => Some(peers[0].socket_addr().to_string()),
+        Err(e) => {
+            eprintln!("[ref_emitter] {e}; falling back to the explicit address");
+            None
+        }
+    }
 }
 
 /// Derive the (lane, wire metadata, in-process emitter config) for a run.
 fn build_emitter(cfg: &Args) -> (StreamKind, BufferMeta, EmitterConfig) {
-    // Lane + canonical wire metadata shared with the live transport sink
-    // (wdr_refsim::emitter::lane_and_meta).
     let (kind, meta) = lane_and_meta(cfg.lossless, cfg.codec);
     let emit_cfg = EmitterConfig {
         kind,
@@ -328,16 +351,27 @@ async fn main() -> ExitCode {
     }
 
     let (kind, meta, emit_cfg) = build_emitter(&args);
+    // `--discover` (FR-003, ADR-006): browse `_wdr._tcp` for the receiver
+    // instead of a hand-typed address, falling back to the explicit `addr`
+    // when nothing resolves within the bounded window.
+    let dial_target = if args.discover {
+        match discover_target() {
+            Some(t) => t,
+            None => args.addr.clone(),
+        }
+    } else {
+        args.addr.clone()
+    };
     eprintln!(
         "[ref_emitter] connecting to {} (lane={kind:?}, codec={:?}, source={:?}, samples={}, buffer={}, cc={cc:?})",
-        args.addr,
+        dial_target,
         meta.codec,
         args.fixture,
         args.total_samples,
         args.buffer.as_str()
     );
 
-    let conn = match dial_loopback(&args.addr).await {
+    let conn = match dial_loopback(&dial_target).await {
         Ok(c) => c,
         Err(e) => {
             write_metrics(

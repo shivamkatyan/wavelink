@@ -370,8 +370,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if sender.selectedSegment == 1 {
             sender.selectedSegment = 0
             let alert = NSAlert()
-            alert.messageText = "Desktop receiver render is the next milestone"
-            alert.informativeText = "Wavelink on macOS can already Emit (capture & stream). Playing a Wavelink stream back on this Mac (Receiver role) is documented follow-up work — use the iOS/Android Wavelink app as a receiver today."
+            alert.messageText = "Desktop receiver render path is wired at the seam"
+            alert.informativeText = "The macOS Receiver role now runs the QUIC → decode → RenderSink pipeline (`macos-emitter --receive`): with `--sink null` it is verified hash-perfect on this host. Playing through an actual output device / USB DAC (`--sink audio`) is the documented device gate (`usb-dac-device`) yet to be validated on real hardware."
             alert.addButton(withTitle: "Got it")
             alert.runModal()
         }

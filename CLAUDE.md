@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Wavelink ("WDR"): an **emitter** app captures system/app audio from a computer, a **receiver** app renders it on another device through a portable USB DAC, over LAN Wi-Fi. Free tier = lossy (Opus); Pro tier = lossless (FLAC/raw PCM, hash-verified). One QUIC connection per session (reliable control stream + unreliable datagrams for lossy media / reliable stream for lossless). No cloud, no accounts, no telemetry.
 
-The project runs on plan–task–gate phases (P0…B7) tracked in `docs/orchestration/`; the reference system (headless emitter⇄receiver over QUIC) is green — **229 tests pass / 0 fail**.
+The project runs on plan–task–gate phases (P0…B7) tracked in `docs/orchestration/`; the reference system (headless emitter⇄receiver over QUIC) is green — **245 tests pass / 0 fail**.
 
 ## Commands
 
@@ -15,7 +15,7 @@ source dev/env.sh            # ALWAYS source first — sets CARGO_HOME + PATH us
 ./dev/bootstrap              # idempotent bootstrap: rustup (pinned stable), just, cargo-ndk, zigbuild, cross
 
 cargo build --workspace
-cargo test --workspace       # 229 tests, 0 fail (includes proptest + fuzz-smoke)
+cargo test --workspace       # 245 tests, 0 fail (includes proptest + fuzz-smoke)
 cargo test -p <crate>        # single crate, e.g. wdr_proto
 cargo test -p <crate> <name> # single test/filter
 cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -54,7 +54,7 @@ Two disjoint build graphs:
 - **`crates/` — the shared, platform-free Rust core** (the root workspace, `members = ["crates/*"]`). This is the proven engine: `wdr_proto` (wire schema/goldens), `wdr_crypto` (Noise XX pairing, AEAD, keys), `wdr_entitlement` (Free/Pro policy), `wdr_codec` (Opus/FLAC/PCM adapters, TPDF dither), `wdr_session` (session FSM), `wdr_transport` (quinn QUIC), `wdr_telemetry`, `wdr_fakes` (deterministic PCM + HashSink + fake adapters), `wdr_rt` (SPSC ring — the RT contract primitives), `wdr_refsim` (headless emitter/receiver sim), `wdr_dev` (DevEx placeholder).
 - **`platform/` — per-OS native shells** (`macos-emitter`, `win-emitter`, `linux-emitter`, `linux-receiver`, the combined `android-wavelink` and `ios` single-app surfaces with in-app role pickers, `desktop-gui`). Each is a **standalone workspace explicitly NOT in the root** with its own `Cargo.lock`. Pattern (see `macos-emitter/README.md`): a host-portable `lib.rs` seam (`CaptureSource` trait + `FakeCaptureSource` + policy gate) builds/tests anywhere; `#[cfg(target_os = "...")]` backend modules hold platform FFI. macOS `win/linux` emitters carry a real launcher UI; `app/main.swift` etc.
 
-**Streaming seam** (the modern shell↔core bridge): shells reach the proven engine through the `AudioFrameSink`/`FrameSink` traits in `wdr_refsim::sink` — `wdr_refsim::sink::QuicAudioSink` owns its tokio+quinn runtime. The macOS shell is **already wired end-to-end** (SCK/fixture → `AudioFrameSink` → encode → CRC → QUIC → receiver, driven by `macos-emitter --stream` and Start/Stop in the AppKit UI); it depends on `wdr_proto`/`wdr_fakes`/`wdr_entitlement`/`wdr_refsim` by path. This deliberately reverses the earlier "zero core-crate deps" stance now that a real stream exists — the seam still keeps shells free of direct tokio/quinn/codec deps. Next milestone: Android/iOS `AudioFrameSink` wiring (their placeholders are still null).
+**Streaming seam** (the modern shell↔core bridge): shells reach the proven engine through the `AudioFrameSink`/`FrameSink` traits in `wdr_refsim::sink` — `wdr_refsim::sink::QuicAudioSink` owns its tokio+quinn runtime. The macOS shell is **already wired end-to-end** (SCK/fixture → `AudioFrameSink` → encode → CRC → QUIC → receiver, driven by `macos-emitter --stream` and Start/Stop in the AppKit UI); it depends on `wdr_proto`/`wdr_fakes`/`wdr_entitlement`/`wdr_refsim` by path. This deliberately reverses the earlier "zero core-crate deps" stance now that a real stream exists — the seam still keeps shells free of direct tokio/quinn/codec deps. The **receiver** half is symmetric: refsim renders through the `RenderSink` trait, the live `QuicRenderReceiver` owns the quinn server, and `macos-emitter --receive` drives it (null sink = hash-verified on host, `macos-receive-smoke.sh`). Android/iOS now wire the **same `FrameSink` shape host-side** (`SinkSeam.kt` 35/0 JVM tests + assembleDebug; `FrameSink.swift` type-check 0 errors, `FixtureFrameSink` replaces demo telemetry); the Rust-in-app FFI (uniffi control-plane + cargo-ndk, per `docs/planning/BRIDGE_PLAN.md`) is the named `android-ci`/`ios-device` gate.
 
 ### Audio data flow (both directions)
 
@@ -62,7 +62,7 @@ Capture → memcpy into a preallocated SPSC ring (RT thread: only this) → work
 
 ### RT_CONTRACT (non-negotiable)
 
-A platform **RT audio callback may only** copy bytes in/out of `wdr_rt::spsc::SpscRing` plus trivial atomic/int math. No alloc, no locks, no syscalls, no logging, no codec/encrypt/transport calls on RT threads — all of that lives on dedicated workers. The RT-side API is `SpscRing::try_push` (capture producer) / `try_pop_exact` (render consumer): no-alloc, no-lock, no-syscall by construction, and `with_capacity` allocates exactly once, off-RT. Enforcement is by the contract itself — the `panic = "abort"` profiles and `rt-guard` abort-on-alloc allocator described in `docs/planning/RT_CONTRACT.md` §4 are **designed, not yet implemented** (no such profile/feature exists in any Cargo.toml today; `wdr_rt`'s own docs say the discipline is "enforced by the RT contract, not by runtime guards"). Per-platform allowed/forbidden tables: `docs/planning/RT_CONTRACT.md`. Never put encode/decode/transport in a platform callback.
+A platform **RT audio callback may only** copy bytes in/out of `wdr_rt::spsc::SpscRing` plus trivial atomic/int math. No alloc, no locks, no syscalls, no logging, no codec/encrypt/transport calls on RT threads — all of that lives on dedicated workers. The RT-side API is `SpscRing::try_push` (capture producer) / `try_pop_exact` (render consumer): no-alloc, no-lock, no-syscall by construction, and `with_capacity` allocates exactly once, off-RT. Enforcement is by the contract itself, **plus a runtime guard (2026-09-13, RT_CONTRACT.md §4)**: the workspace release profiles `panic = "abort"`, and `wdr_rt`'s `rt-guard` feature installs a `#[global_allocator]` that aborts on any heap allocation made inside an RT-callback context (`RtGuard::enter()` brackets a platform callback; out-of-RT allocation is unaffected — subprocess-verified). Per-platform allowed/forbidden tables: `docs/planning/RT_CONTRACT.md`. Never put encode/decode/transport in a platform callback.
 
 ### Entitlement seam
 
@@ -81,7 +81,7 @@ A platform **RT audio callback may only** copy bytes in/out of `wdr_rt::spsc::Sp
 - **`docs/planning/` is the source of truth**: ARCHITECTURE, PROTOCOL_SPEC, ADRS/001–010, PLATFORM_MATRIX, RT_CONTRACT, SECURITY_SPEC, TEST_PLAN, RISK_REGISTER, and the FR-by-FR honest status audit in REQUIREMENTS_TRACEABILITY.md (✅/🟡/🔒/🚫/⬜).
 - **`docs/orchestration/` tracks gates**: RELEASE_STATUS, QUALITY_DASHBOARD, PACKAGING, ACCEPTANCE_CHECKLIST, DECISION_LOG, plus `reports/` and `incidents/`.
 - Hardware/SLO claims (real capture on hardware, native RT timing, signing/notarization, USB-DAC hotplug, bit-perfect loopback) are **external gates that cannot be satisfied on any single host** — never mark them done without evidence. A "pending gate" is allowed only with its runbook (HARDWARE_VALIDATION.md / RELEASE_AND_SIGNING.md). Mark simulated runs as simulated.
-- CI status (2026-09-13): **live** — `pages.yml` (deployed), `release.yml` (v0.0.1), `ci.yml` (`linux-core` + `macos-shell` + `android-emulator` on hosted runners), `license-audit.yml` (enabled with the explicit PR/dispatch/tag-push predicate). Still **gated off**: `ci.yml`'s `windows-basic`/`ios-simulator` (echo placeholders until their real steps land) and `reference-sim.yml` (needs a NET_ADMIN-capable self-hosted runner — it cannot run on GitHub-hosted runners). Read the workflow headers before "fixing" the disabled ones.
+- CI status (2026-09-13): **live** — `pages.yml` (deployed), `release.yml` (v0.0.1), `ci.yml` (`linux-core` + `macos-shell` + `android-emulator` on hosted runners), `license-audit.yml` (enabled with the explicit PR/dispatch/tag-push predicate). All five `ci.yml` jobs now run real steps on hosted runners (`windows-basic` = core build + win-emitter portable test; `ios-simulator` = merged-app simulator-SDK type-check 0 errors). Still **gated off**: `reference-sim.yml` (needs a NET_ADMIN-capable self-hosted runner — it cannot run on GitHub-hosted runners). Read the workflow headers before "fixing" the disabled ones.
 
 ## Conventions
 

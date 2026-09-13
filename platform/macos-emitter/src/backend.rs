@@ -36,6 +36,7 @@
 pub mod hal;
 pub mod hotplug;
 pub mod permission;
+pub mod render;
 pub mod system_capture;
 
 #[cfg(feature = "macos14-taps")]

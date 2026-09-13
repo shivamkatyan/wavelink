@@ -3,10 +3,11 @@
 //!
 //! Contract (ADR-005, TEST_PLAN §Golden audio, `wdr_fakes` crate docs):
 //! lossless means **sample-identical** — `hash(decoded) == hash(source)` with
-//! no tolerance. The canonical byte stream is `i16` little-endian, stereo
-//! interleaved `L–R–L–R` at 48 kHz. The recorded golden hashes (blake3,
-//! chunk=512 samples, total=4096 samples) live in `t-B0-fakes.md` and are
-//! asserted here as `hash(decoded bytes) == canonical golden` for every i16
+//! no tolerance. The canonical byte stream is `i16` little-endian for 16-bit
+//! and 24-bit packed (3 bytes/sample, right-aligned i32 / low-3-bytes LE) for
+//! 24-bit, stereo interleaved `L–R–L–R` at 48 kHz. The recorded golden hashes
+//! (blake3, chunk=512 samples, total=4096 samples) live in `t-B0-fakes.md` and
+//! are asserted here as `hash(decoded bytes) == canonical golden` for every
 //! fixture row the `wdr_codec` adapters can drive.
 //!
 //! # Coverage matrix
@@ -15,15 +16,18 @@
 //! |---------|--------|-----------------|--------|
 //! | `PcmAdapter`  | i16 | 48k / stereo | ✅ hash(decoded)==golden for all 9 fixtures + channel order |
 //! | `FlacAdapter` | i16 | 48k / stereo | ✅ hash(decoded)==golden for all 9 fixtures + channel order |
-//! | i24 (any adapter) | — | — | ⛔ skipped with typed reason (adapters are i16-only at B0; `I24Packed` is a future `Unsupported` stub, ADR-005) |
+//! | `PcmAdapter::new24` + `CodecAdapter24` | 24-bit | 48k / stereo | ✅ hash(decoded)==golden for the 5 recorded i24 fixtures |
+//! | `FlacAdapter::new(.., 24)` + `CodecAdapter24` | 24-bit | 48k / stereo | ✅ hash(decoded)==golden for the 5 recorded i24 fixtures |
 //!
 //! Existing golden tests (`tests/golden.rs`) are left unchanged; they may
 //! overlap — that is intended. Malformed-input coverage stays in the existing
 //! golden/roundtrip/properties suites.
 
-use wdr_codec::{CodecAdapter, CodecError, FlacAdapter, PcmAdapter, SampleRepr};
+use wdr_codec::{CodecAdapter, CodecAdapter24, CodecError, FlacAdapter, PcmAdapter, SampleRepr};
 use wdr_fakes::hash::HashSink;
-use wdr_fakes::source::{ChannelKind, Fixture, FixtureKind, PcmSource, SampleFormat, Stereo};
+use wdr_fakes::source::{
+    unpack_i24, ChannelKind, Fixture, FixtureKind, PcmSource, SampleFormat, Stereo,
+};
 
 /// Canonical golden instrumentation parameters (must match `wdr_fakes`
 /// `tests/golden.rs` / `examples/golden_hashes.rs` exactly).
@@ -123,6 +127,29 @@ fn canonical_bytes_from_i16(samples: &[i16]) -> Vec<u8> {
     let mut out = Vec::with_capacity(samples.len() * 2);
     for &s in samples {
         out.extend_from_slice(&s.to_le_bytes());
+    }
+    out
+}
+
+/// Convert canonical i24 low-3-byte wire bytes back into interleaved
+/// right-aligned `i32` samples (the `CodecAdapter24` input slice).
+fn i32_samples_from_canonical_i24(bytes: &[u8]) -> Vec<i32> {
+    bytes
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|c| unpack_i24(c))
+        .collect()
+}
+
+/// Convert decoded interleaved `i32` samples back into the canonical i24
+/// low-3-byte wire stream (mirror `wdr_fakes` `SampleFormat::I24` encoding).
+fn canonical_i24_from_i32(samples: &[i32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(samples.len() * 3);
+    for &s in samples {
+        let c = s.clamp(-(1i32 << 23) + 1, (1i32 << 23) - 1);
+        let b = c.to_le_bytes();
+        out.extend_from_slice(&b[..3]);
     }
     out
 }
@@ -325,28 +352,226 @@ fn flac_preserves_channel_id_left_equals_pattern_a_right_equals_pattern_b() {
 }
 
 // ---------------------------------------------------------------------------
-// i24 — the unsupported cell, asserted as a *typed* skip (never a silent pass)
+// i24 — 24-bit lossless via `CodecAdapter24`, driven against the recorded
+// canonical i24 goldens (ADR-005 follow-up)
 // ---------------------------------------------------------------------------
 
-/// The `wdr_codec` adapters are i16-only at B0 (ADR-005: 16-bit implemented;
-/// 24-bit is the `I24Packed`/`F32`/`I32` future stub path). `wdr_fakes` does
-/// emit canonical i24 goldens, but a lossless i24 *roundtrip* cannot be wired
-/// until the adapters grow an i24 code path. Rather than silently skipping,
-/// this test asserts the typed `Unsupported` contract so the matrix honestly
-/// records "i24: not covered at B0" instead of pretending it passed.
+/// The 5 recorded i24/48k/stereo golden rows (chunk=512, total=4096), exactly
+/// as in `wdr_fakes/tests/golden.rs` / `t-B0-fakes.md`. (Impulse-train and
+/// sine-sweep have i16 goldens only today.)
+fn i24_48k_stereo_goldens() -> Vec<GoldenSpec> {
+    vec![
+        GoldenSpec {
+            name: "silence",
+            kind: FixtureKind::Silence,
+            golden: "819ad8f20ee2578f84eeb28b4aa852458c066911cce810767021030961e43e60",
+        },
+        GoldenSpec {
+            name: "full-scale-edge",
+            kind: FixtureKind::FullScaleEdge,
+            golden: "0a212e00175469d8156a45786d8efd226d2447842d8033b4ce5035fa85272978",
+        },
+        GoldenSpec {
+            name: "pseudo-random-pcm",
+            kind: FixtureKind::PseudoRandomPcm,
+            golden: "edf3016e9c7dd72253b5781fbd0443ed278482261d92c960ee573ebc491ef3ca",
+        },
+        GoldenSpec {
+            name: "channel-id-left",
+            kind: FixtureKind::ChannelId {
+                lane: Stereo::LeftPattern,
+            },
+            golden: "89569544da2e919779c563282867930ecbf7d4c529ea29f747d359c5de394515",
+        },
+        GoldenSpec {
+            name: "channel-id-right",
+            kind: FixtureKind::ChannelId {
+                lane: Stereo::RightPattern,
+            },
+            golden: "e5c162450ac2eb8d47505c9133bc48bae8a1ac025147910316748d6d6fad6555",
+        },
+    ]
+}
+
+/// Drive the full 4096-sample fixture through `adapter.encode_24 →
+/// adapter.decode_24` in 512-sample chunks, hashing both the source wire
+/// bytes and the decoded wire bytes in canonical i24 form. Same lossless
+/// contract as the i16 driver: `hash(decoded) == hash(source)` and
+/// `hash(source) == recorded canonical golden`.
+#[track_caller]
+fn assert_i24_lossless_against_canonical_golden(
+    adapter: &mut dyn CodecAdapter24,
+    spec: &GoldenSpec,
+) -> String {
+    let mut fx = Fixture::new(
+        spec.kind.clone(),
+        SampleFormat::I24,
+        RATE,
+        ChannelKind::Stereo,
+        SAMPLES,
+    );
+    let mut source_sink = HashSink::start();
+    let mut decoded_sink = HashSink::start();
+    let mut chunks = 0u32;
+    loop {
+        let got = fx.next_chunk(CHUNK);
+        if got.len == 0 {
+            break;
+        }
+        chunks += 1;
+        assert_eq!(got.len, CHUNK as usize, "expected chunk of {CHUNK} samples");
+        source_sink.push(got.bytes);
+
+        let samples = i32_samples_from_canonical_i24(got.bytes);
+        let encoded = adapter.encode_24(&samples).expect("encode_24");
+        let decoded = adapter.decode_24(&encoded).expect("decode_24");
+        assert_eq!(
+            decoded.len(),
+            samples.len(),
+            "decoded sample count must match source chunk"
+        );
+        let decoded_bytes = canonical_i24_from_i32(&decoded);
+        assert_eq!(decoded_bytes.len(), got.bytes.len());
+        decoded_sink.push(&decoded_bytes);
+    }
+    assert!(chunks > 0, "fixture produced no chunks");
+    assert_eq!(
+        chunks * CHUNK,
+        SAMPLES as u32,
+        "chunking must reproduce the canonical stream length"
+    );
+
+    let decoded_hex = decoded_sink.hex();
+    let source_hex = source_sink.hex();
+
+    // Lossless contract: hash(decoded) == hash(source), tolerance-free.
+    assert_eq!(
+        decoded_hex,
+        source_hex,
+        "i24 lossless equality broken for {}: {}: decoded {} != source {}",
+        spec.name,
+        adapter.name(),
+        decoded_hex,
+        source_hex
+    );
+    // The source hashed with the canonical chunking equals the recorded golden.
+    assert_eq!(
+        source_hex, spec.golden,
+        "fixture drift vs canonical i24 golden for {}: {}",
+        spec.name, source_hex
+    );
+
+    decoded_hex
+}
+
 #[test]
-fn i24_is_typed_unsupported_not_silently_passed() {
-    // 24-bit FLAC construction is a typed error.
-    assert!(matches!(
-        FlacAdapter::new(RATE, CHANNELS, 24),
-        Err(CodecError::Unsupported(_))
-    ));
-    // The codec's own 24-bit sample representation is a stub.
-    assert!(matches!(
-        SampleRepr::I24Packed.validate(),
-        Err(CodecError::Unsupported(_))
-    ));
-    // F32/I32 stubs likewise — nothing below i16 is claimable as verified.
+fn flac_i24_48k_stereo_all_canonical_fakes_goldens() {
+    for spec in i24_48k_stereo_goldens() {
+        let mut a = FlacAdapter::new(RATE, CHANNELS, 24).unwrap();
+        let hex = assert_i24_lossless_against_canonical_golden(&mut a, &spec);
+        assert_eq!(
+            hex, spec.golden,
+            "FLAC-24 decoded hash must equal canonical golden for {}",
+            spec.name
+        );
+    }
+}
+
+#[test]
+fn pcm_i24_48k_stereo_all_canonical_fakes_goldens() {
+    for spec in i24_48k_stereo_goldens() {
+        let mut a = PcmAdapter::new24(CHANNELS).unwrap();
+        let hex = assert_i24_lossless_against_canonical_golden(&mut a, &spec);
+        assert_eq!(
+            hex, spec.golden,
+            "PCM-24 decoded hash must equal canonical golden for {}",
+            spec.name
+        );
+    }
+}
+
+#[test]
+fn i24_channel_order_preserved_by_codec_adapter_24() {
+    // Decode the i24 channel-id fixtures through both 24-bit adapters and
+    // assert left = pattern A (+564) / right = pattern B (−904), the same
+    // levels the i16 channel-order check uses.
+    assert_channel_order_preserved_24(
+        &mut FlacAdapter::new(RATE, CHANNELS, 24).unwrap(),
+        FixtureKind::ChannelId {
+            lane: Stereo::LeftPattern,
+        },
+        FixtureKind::ChannelId {
+            lane: Stereo::RightPattern,
+        },
+    );
+    assert_channel_order_preserved_24(
+        &mut PcmAdapter::new24(CHANNELS).unwrap(),
+        FixtureKind::ChannelId {
+            lane: Stereo::LeftPattern,
+        },
+        FixtureKind::ChannelId {
+            lane: Stereo::RightPattern,
+        },
+    );
+}
+
+#[track_caller]
+fn assert_channel_order_preserved_24(
+    adapter: &mut dyn CodecAdapter24,
+    left_kind: FixtureKind,
+    right_kind: FixtureKind,
+) {
+    for (kind, (left, right)) in [
+        (left_kind, (564i32, -564i32)),
+        (right_kind, (904i32, -904i32)),
+    ] {
+        let mut fx = Fixture::new(kind, SampleFormat::I24, RATE, ChannelKind::Stereo, SAMPLES);
+        let mut frames_checked = 0usize;
+        loop {
+            let got = fx.next_chunk(CHUNK);
+            if got.len == 0 {
+                break;
+            }
+            let samples = i32_samples_from_canonical_i24(got.bytes);
+            let encoded = adapter.encode_24(&samples).expect("encode_24");
+            let decoded = adapter.decode_24(&encoded).expect("decode_24");
+            assert_eq!(
+                decoded.len(),
+                samples.len(),
+                "i24 channel-order decode length mismatch"
+            );
+            for frame in 0..decoded.len() / usize::from(CHANNELS) {
+                assert_eq!(
+                    decoded[frame * 2],
+                    left,
+                    "left lane must stay pattern A after {} decode",
+                    adapter.name()
+                );
+                assert_eq!(
+                    decoded[frame * 2 + 1],
+                    right,
+                    "right lane must stay pattern B after {} decode",
+                    adapter.name()
+                );
+            }
+            frames_checked += decoded.len() / usize::from(CHANNELS);
+        }
+        assert_eq!(frames_checked, SAMPLES as usize / usize::from(CHANNELS));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// i24 representation contract — the remaining stubs stay *typed* errors, and
+// 24-bit is genuinely implemented (never a silent i16 fall-through)
+// ---------------------------------------------------------------------------
+
+/// The `wdr_codec` adapters now implement 16-bit and 24-bit lossless
+/// (ADR-005 follow-up). `F32`/`I32` remain declared-but-unimplemented stubs
+/// and must keep returning a typed `Unsupported` — nothing below i16/i24 is
+/// claimable as verified.
+#[test]
+fn i24_implemented_and_f32_i32_still_stubs() {
+    assert!(matches!(SampleRepr::I24Packed.validate(), Ok(())));
     assert!(matches!(
         SampleRepr::F32.validate(),
         Err(CodecError::Unsupported(_))
@@ -355,13 +580,4 @@ fn i24_is_typed_unsupported_not_silently_passed() {
         SampleRepr::I32.validate(),
         Err(CodecError::Unsupported(_))
     ));
-    // PcmAdapter has no bit-depth constructor: its API is interleaved `&[i16]`,
-    // so it cannot even represent an i24 sample at B0.
-    eprintln!(
-        "[wdr_codec golden-vs-fakes] SKIP lossless i24 roundtrip: adapters are i16-only at B0 \
-         (I24Packed/F32/I32 = Unsupported stub, ADR-005 focuses 16/24-bit, 16-bit implemented). \
-         wdr_fakes i24 goldens are recorded (full-scale-edge/i24/48k/stereo, channel-id i24 rows) \
-         but need an i24 adapter code path before they can be wired here. \
-         Covered: i16 @ 48k stereo only."
-    );
 }

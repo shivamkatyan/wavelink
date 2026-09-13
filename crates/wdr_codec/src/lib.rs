@@ -27,11 +27,11 @@
 //!
 //! # Format coverage
 //!
-//! [`score_test`](`sample_repr` coverage): `I16` is the implemented
-//! representation. `F32`, `I24Packed`, `I32` are marked as future stubs and
-//! return [`CodecError::Unsupported`] for now (ADR-005 focuses 16/24-bit first;
-//! the 24-bit path is binary-compatible with `I16`-sample internal processing
-//! once dither is applied).
+//! [`score_test`](`sample_repr` coverage): `I16` (16-bit) and `I24Packed`
+//! (24-bit) are implemented — 16-bit over the [`CodecAdapter`] i16 surface and
+//! 24-bit over the parallel [`CodecAdapter24`] i32 surface (canonical
+//! right-aligned i32 / low-3-bytes LE, ADR-005 16/24-bit). `F32`/`I32` remain
+//! future stubs returning [`CodecError::Unsupported`].
 //!
 //! [`max_frame_samples`]: crate::size::max_frame_samples
 
@@ -42,8 +42,8 @@ pub mod resample;
 pub mod size;
 
 pub use adapters::{
-    frame_crc32, CodecAdapter, CodecKind, FlacAdapter, FrameProfile, OpusAdapter, PcmAdapter,
-    SampleRepr,
+    frame_crc32, CodecAdapter, CodecAdapter24, CodecKind, FlacAdapter, FrameProfile, OpusAdapter,
+    PcmAdapter, SampleRepr,
 };
 pub use dither::{tpdf_dither_24_to_16, DitherRng, TwentyFourBitSamples};
 pub use error::CodecError;

@@ -2,7 +2,7 @@
 //! via pure-Rust claxon. Small fixed blocks (~240 samples @48k), per-frame
 //! CRC-32 on the raw frame bytes (ADR-005 / PROTOCOL_SPEC §Codec profiles).
 
-use super::CodecAdapter;
+use super::{CodecAdapter, CodecAdapter24};
 use crate::error::CodecError;
 use crate::size::{CodecKind, MAX_FRAME_PAYLOAD};
 
@@ -16,7 +16,8 @@ pub const FLAC_BLOCK_DEFAULT: usize = 240;
 /// FLAC adapter. Encodes a whole frame (multiple of the block size) in one
 /// `encode()` call and returns the complete native-FLAC stream bytes for the
 /// frame (into a byte sink). `decode()` parses the frame back with claxon and
-/// returns exactly the source samples.
+/// returns exactly the source samples. Supports 16-bit (i16) **and** 24-bit
+/// (right-aligned i32 via [`CodecAdapter24`]) lossless (ADR-005 16/24-bit).
 pub struct FlacAdapter {
     channels: u16,
     bits_per_sample: u16,
@@ -25,14 +26,17 @@ pub struct FlacAdapter {
 }
 
 impl FlacAdapter {
-    /// Create a FLAC adapter for `channels` × `bits_per_sample` at
-    /// `sample_rate`. Only 16-bit is implemented for the decode side (claxon
-    /// decodes to i32 samples; the 24-bit path is a future stub via
-    /// [`crate::SampleRepr`], ADR-005 focuses 16/24-bit).
+    /// Create a FLAC adapter for `channels` × `bits_per_sample` (16 or 24) at
+    /// `sample_rate`.
+    ///
+    /// The i16 ([`CodecAdapter`]) surface is only valid for a 16-bit adapter;
+    /// `bits_per_sample = 24` produces a 24-bit adapter whose i32 surface is
+    /// [`CodecAdapter24`] (calling the i16 methods on it returns a typed
+    /// [`CodecError::Unsupported`] rather than silently down-converting).
     pub fn new(sample_rate: u32, channels: u16, bits_per_sample: u16) -> Result<Self, CodecError> {
-        if bits_per_sample != 16 {
+        if bits_per_sample != 16 && bits_per_sample != 24 {
             return Err(CodecError::Unsupported(format!(
-                "FLAC adapter implements 16-bit only for now (ADR-005); requested {bits_per_sample}-bit"
+                "FLAC adapter implements 16/24-bit only (ADR-005); requested {bits_per_sample}-bit"
             )));
         }
         if channels == 0 || channels > 2 {
@@ -118,12 +122,19 @@ impl FlacAdapter {
             )));
         }
         let mut out: Vec<i32> = Vec::new();
+        // Depth-aware sanity range: claxon yields i32 samples in
+        // [-(2^(b-1)), 2^(b-1)), so 16-bit frames must land in i16 range and
+        // 24-bit frames in the canonical right-aligned i24 range.
+        let half = 1i32 << (self.bits_per_sample - 1);
         for s in reader.samples() {
             let v = s.map_err(|e| CodecError::MalformedFrame(format!("claxon sample: {e}")))?;
-            if !(-(1i32 << 16)..(1i32 << 16)).contains(&v) {
+            // Closed signed range [-2^(b-1), 2^(b-1)-1] matches FLAC's sample
+            // range exactly (the half-open `..half` form would wrongly reject
+            // the most-negative sample -2^(b-1)).
+            if v < -half || v >= half {
                 return Err(CodecError::MalformedFrame(format!(
-                    "FLAC frame sample {} out of 16-bit range",
-                    v
+                    "FLAC frame sample {} out of {}-bit range",
+                    v, self.bits_per_sample
                 )));
             }
             out.push(v);
@@ -142,6 +153,12 @@ impl CodecAdapter for FlacAdapter {
     }
 
     fn encode(&mut self, pcm: &[i16]) -> Result<Box<[u8]>, CodecError> {
+        if self.bits_per_sample != 16 {
+            return Err(CodecError::Unsupported(format!(
+                "constructing a {}-bit FLAC adapter; i16 encode needs a 16-bit adapter (use `CodecAdapter24` for 24-bit)",
+                self.bits_per_sample
+            )));
+        }
         if pcm.is_empty() {
             return Err(CodecError::InvalidPcmLen {
                 len: 0,
@@ -160,6 +177,12 @@ impl CodecAdapter for FlacAdapter {
     }
 
     fn decode(&mut self, bytes: &[u8]) -> Result<Box<[i16]>, CodecError> {
+        if self.bits_per_sample != 16 {
+            return Err(CodecError::Unsupported(format!(
+                "constructing a {}-bit FLAC adapter; i16 decode needs a 16-bit adapter (use `CodecAdapter24` for 24-bit)",
+                self.bits_per_sample
+            )));
+        }
         if bytes.is_empty() || bytes.len() > MAX_FRAME_PAYLOAD {
             return Err(if bytes.is_empty() {
                 CodecError::MalformedFrame("empty FLAC frame".into())
@@ -176,6 +199,46 @@ impl CodecAdapter for FlacAdapter {
             .map(|&v| v as i16)
             .collect::<Vec<i16>>()
             .into_boxed_slice())
+    }
+}
+
+impl CodecAdapter24 for FlacAdapter {
+    fn kind(&self) -> CodecKind {
+        CodecKind::Flac
+    }
+
+    fn name(&self) -> &'static str {
+        "Flac-24"
+    }
+
+    fn encode_24(&mut self, pcm: &[i32]) -> Result<Box<[u8]>, CodecError> {
+        if self.bits_per_sample != 24 {
+            return Err(CodecError::Unsupported(format!(
+                "constructing a {}-bit FLAC adapter; encode_24 needs a 24-bit adapter (use `new(.., 24)`)",
+                self.bits_per_sample
+            )));
+        }
+        self.encode_flac(pcm)
+    }
+
+    fn decode_24(&mut self, bytes: &[u8]) -> Result<Box<[i32]>, CodecError> {
+        if self.bits_per_sample != 24 {
+            return Err(CodecError::Unsupported(format!(
+                "constructing a {}-bit FLAC adapter; decode_24 needs a 24-bit adapter (use `new(.., 24)`)",
+                self.bits_per_sample
+            )));
+        }
+        if bytes.is_empty() || bytes.len() > MAX_FRAME_PAYLOAD {
+            return Err(if bytes.is_empty() {
+                CodecError::MalformedFrame("empty FLAC frame".into())
+            } else {
+                CodecError::PayloadTooLarge {
+                    size: bytes.len(),
+                    cap: MAX_FRAME_PAYLOAD,
+                }
+            });
+        }
+        self.decode_flac(bytes)
     }
 }
 
@@ -232,9 +295,48 @@ mod tests {
     }
 
     #[test]
-    fn flac_rejects_24bit_for_now() {
+    fn flac_24bit_48k_stereo_roundtrip_exact() {
+        // ADR-005 follow-up: 24-bit lossless over the i32 `CodecAdapter24`
+        // surface, canonical i24 range (right-aligned, top byte zero).
+        use crate::adapters::CodecAdapter24;
+        let mut a = FlacAdapter::new(48_000, 2, 24).unwrap();
+        let pcm: Vec<i32> = (0..480 * 2)
+            .map(|i| {
+                let v = (i as i64 % 0x0100_0000) - 0x0080_0000; // -2^23 .. 2^23
+                v as i32
+            })
+            .collect();
+        let enc = a.encode_24(&pcm).unwrap();
+        assert!(!enc.is_empty());
+        let dec = a.decode_24(&enc).unwrap();
+        assert_eq!(dec, pcm.into_boxed_slice(), "24-bit lossless must be exact");
+        // 16-bit methods on a 24-bit adapter are typed errors, never silent
+        // down-converts.
+        let mut a16 = a;
+        assert!(a16.encode(&[0i16, 1]).is_err());
+        assert!(matches!(a16.decode(&enc), Err(CodecError::Unsupported(_))));
+    }
+
+    #[test]
+    fn flac_24bit_uses_low_three_bytes_on_wire() {
+        use crate::adapters::CodecAdapter24;
+        let mut a = FlacAdapter::new(48_000, 1, 24).unwrap();
+        let mono = vec![0x0012_3456i32]; // top byte zero already
+        let enc = a.encode_24(&mono).unwrap();
+        let dec = a.decode_24(&enc).unwrap();
+        assert_eq!(dec, mono.into_boxed_slice());
+        // Extreme 24-bit values (the most negative has its 24th bit set).
+        let mono2 = vec![0x007F_FFFFi32, -0x0080_0000i32, 0i32];
+        let enc2 = a.encode_24(&mono2).unwrap();
+        let dec2 = a.decode_24(&enc2).unwrap();
+        assert_eq!(dec2, mono2.into_boxed_slice());
+    }
+
+    #[test]
+    fn flac_rejects_unsupported_bit_depths() {
+        // Only 16/24-bit are implemented (ADR-005).
         assert!(matches!(
-            FlacAdapter::new(48_000, 2, 24),
+            FlacAdapter::new(48_000, 2, 32),
             Err(CodecError::Unsupported(_))
         ));
     }

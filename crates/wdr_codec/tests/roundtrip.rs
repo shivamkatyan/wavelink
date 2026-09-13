@@ -205,9 +205,15 @@ fn frame_size_calculator_consistency() {
 // ------------------------------------------------- unsupported / malformed
 
 #[test]
-fn flac_rejects_24_bit_with_unsupported() {
+fn flac_rejects_unsupported_bit_depths() {
+    // 24-bit is implemented (ADR-005 follow-up); only 16/24 are accepted.
+    assert!(FlacAdapter::new(48_000, 2, 24).is_ok());
     assert!(matches!(
-        FlacAdapter::new(48_000, 2, 24),
+        FlacAdapter::new(48_000, 2, 32),
+        Err(CodecError::Unsupported(_))
+    ));
+    assert!(matches!(
+        FlacAdapter::new(48_000, 2, 0),
         Err(CodecError::Unsupported(_))
     ));
 }

@@ -14,10 +14,14 @@
 //! follow-up (`wdr_crypto` is ready but not wired; loopback security is the
 //! quinn TLS 1.3 identity, 0-RTT off).
 
+use std::net::SocketAddr;
+use std::time::Duration;
+
 use wdr_entitlement::provider::Tier;
 use wdr_proto::{ChannelLayout, Codec, SampleRepr};
 
 use crate::emitter::{lane_and_meta, policy_gate, wire_meta, Emitter, EmitterError};
+use crate::receiver::{BufferProfile, ReceiverError, ReceiverOutcome};
 
 /// Stable capture/format metadata delivered once (the Android
 /// `FrameSink.onFormat` analogue). Declared by the shell once the format is
@@ -53,6 +57,46 @@ pub trait AudioFrameSink {
 /// resolve to the same seam.
 pub use AudioFrameSink as FrameSink;
 
+/// The receiver-side render seam — the decoded-canonical-bytes consumer whose
+/// mirror of [`AudioFrameSink`] makes the receive half of the pipeline
+/// injectable the same way the capture half is.
+///
+/// A render device receives the **decoded canonical PCM** stream: the
+/// reference sim's null device hashes it (blake3) + counts underruns, while a
+/// real desktop/mobile shell's output sink (AVAudioEngine / HAL / AudioTrack)
+/// plays it. Same golden/fixture machinery drives both, so the receiver
+/// plumbing is testable end-to-end without hardware.
+///
+/// Synchronous, NOT `Send` (like the emitter seam): created and driven from
+/// the worker thread that owns the receiver pipeline.
+pub trait RenderSink {
+    /// Called once, before the first block, when the decoded output format is
+    /// stable (the receiver sniffs it from the first frame).
+    fn on_format(&mut self, fmt: SinkFormat) -> Result<(), SinkError>;
+    /// One block of decoded canonical PCM bytes (interleaved LE, any size).
+    fn on_block(&mut self, bytes: &[u8]) -> Result<(), SinkError>;
+    /// Flush + finalize the render device; no calls after.
+    fn finish(&mut self) -> Result<(), SinkError>;
+
+    /// Bytes accepted by the sink (render telemetry readout). Defaults to 0;
+    /// the null render device reports its real count.
+    fn bytes_rendered(&self) -> u64 {
+        0
+    }
+
+    /// Simulated-device underruns (null render device only by default).
+    fn underruns(&self) -> u64 {
+        0
+    }
+
+    /// Lossless-integrity hash of everything rendered, if the sink verifies
+    /// (the null render device returns its blake3 hash; a real playback sink
+    /// returns `None`).
+    fn integrity_hash(&self) -> Option<blake3::Hash> {
+        None
+    }
+}
+
 /// Typed errors from the transport seam. No panics on data.
 #[derive(Debug)]
 pub enum SinkError {
@@ -70,6 +114,7 @@ impl From<EmitterError> for SinkError {
         match e {
             EmitterError::Encode(ce) => SinkError::Encode(ce),
             EmitterError::Send(s) => SinkError::Send(s),
+            EmitterError::Format(m) => SinkError::Format(m),
             EmitterError::Policy(m) => SinkError::Policy(m),
         }
     }
@@ -92,6 +137,73 @@ impl core::fmt::Display for SinkError {
     }
 }
 impl std::error::Error for SinkError {}
+
+/// Listen for **one** emitter connection and render its decoded stream into a
+/// caller-supplied [`RenderSink`]. This is the receiver-side mirror of
+/// [`QuicAudioSink`]: it owns the quinn server and drives the shared
+/// `receiver_server` lane machinery on a dedicated thread, so a desktop/mobile
+/// shell supplies only a **`Send`** [`RenderSink`] and blocks on
+/// [`QuicRenderReceiver::wait`] — no tokio/quinn dependencies required in the
+/// shell (WS3 receiver render seam).
+///
+/// Why `Send`: the quinn server must poll its endpoint driver continuously for
+/// the handshake to progress while a remote emitter dials, so the receive loop
+/// runs on its own OS thread. `NullRenderSink` (and any shell sink composed of
+/// plain data + a channel to the platform audio thread) is `Send`; a sink that
+/// must stay on one thread can drive
+/// [`crate::receiver_server::run_listener`] itself from its own worker instead.
+pub struct QuicRenderReceiver {
+    rx: std::sync::mpsc::Receiver<Result<ReceiverOutcome, ReceiverError>>,
+    local_addr: SocketAddr,
+}
+
+impl QuicRenderReceiver {
+    /// Start listening on `addr` for one emitter connection on a dedicated
+    /// thread; every decoded block is delivered into `sink`. Returns once the
+    /// endpoint is bound; call [`wait`](Self::wait) to block to completion.
+    pub fn listen(
+        addr: SocketAddr,
+        profile: BufferProfile,
+        sink: Box<dyn RenderSink + Send>,
+    ) -> Result<Self, SinkError> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| SinkError::Send(format!("tokio runtime: {e}")))?;
+        let config = crate::receiver_server::loopback_server_config();
+        let endpoint = rt
+            .block_on(async move { quinn::Endpoint::server(config, addr) })
+            .map_err(|e| SinkError::Send(format!("quinn bind {addr}: {e}")))?;
+        let local_addr = endpoint
+            .local_addr()
+            .map_err(|e| SinkError::Send(format!("endpoint local_addr: {e}")))?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("wdr-receive".to_string())
+            .spawn(move || {
+                let outcome = rt.block_on(crate::receiver_server::run_listener(
+                    endpoint, profile, sink,
+                ));
+                let _ = tx.send(outcome);
+            })
+            .map_err(|e| SinkError::Send(format!("spawn receive thread: {e}")))?;
+        Ok(Self { rx, local_addr })
+    }
+
+    /// The bound local address (the emitter dials this).
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    /// Block the current (worker) thread until the receive loop completes with
+    /// an outcome, or `timeout` elapses. Can be awaited at most once.
+    pub fn wait(&mut self, timeout: Duration) -> Result<ReceiverOutcome, SinkError> {
+        self.rx
+            .recv_timeout(timeout)
+            .map_err(|_| SinkError::Send("receive loop timed out".into()))?
+            .map_err(|e| SinkError::Send(format!("receive: {e}")))
+    }
+}
 
 /// A QUIC audio sink that **owns its own tokio runtime** plus the quinn
 /// endpoint/connection (dialed here, accept-any loopback identity, 0-RTT off).

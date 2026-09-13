@@ -29,6 +29,7 @@ use wdr_proto::{Codec, Frame, FrameIntegrity, Integrity, SampleRepr, FRAME_VERSI
 
 use crate::emitter::BufferMeta;
 use crate::framing::{FrameWire, FramedItem, FramingError};
+use crate::sink::{RenderSink, SinkFormat};
 
 /// Hard bound on the in-order jitter queue (frames). Mirrors the
 /// `BufferProfile` ballpark while keeping a generous, *bounded* ceiling so a
@@ -425,11 +426,13 @@ impl JitterBuffer {
     }
 }
 
-/// Injectable millisecond clock (deterministic, shareable across clones).
+/// Injectable millisecond clock (deterministic, shareable across clones;
+/// `Arc<AtomicU64>` keeps `NullRenderSink` `Send` so the live receiver can run
+/// its quinn server on a dedicated thread).
 #[derive(Debug, Clone)]
 pub enum ClockHandle {
     System,
-    Injectable(std::rc::Rc<std::cell::Cell<u64>>),
+    Injectable(std::sync::Arc<std::sync::atomic::AtomicU64>),
 }
 
 impl ClockHandle {
@@ -438,7 +441,9 @@ impl ClockHandle {
     }
 
     pub fn injectable(now_ms: u64) -> Self {
-        ClockHandle::Injectable(std::rc::Rc::new(std::cell::Cell::new(now_ms)))
+        ClockHandle::Injectable(std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
+            now_ms,
+        )))
     }
 
     pub fn now_ms(&self) -> u64 {
@@ -447,13 +452,17 @@ impl ClockHandle {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0),
-            ClockHandle::Injectable(c) => c.get(),
+            ClockHandle::Injectable(c) => c.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
 
     pub fn advance_ms(&self, ms: u64) {
         if let ClockHandle::Injectable(c) = self {
-            c.set(c.get().saturating_add(ms));
+            let _ = c.fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |v| Some(v.saturating_add(ms)),
+            );
         }
     }
 }
@@ -524,6 +533,39 @@ impl NullRenderSink {
     }
 }
 
+/// The null render device is the reference sim's `RenderSink`: it hashes
+/// (canonical blake3) and counts underruns against its injectable clock. Its
+/// `on_block` feeds the same `render` body, so the render seam and the hash
+/// verification are one path.
+impl RenderSink for NullRenderSink {
+    fn on_format(&mut self, _fmt: SinkFormat) -> Result<(), crate::sink::SinkError> {
+        // The null device hashes bytes only — format is immaterial.
+        Ok(())
+    }
+
+    fn on_block(&mut self, bytes: &[u8]) -> Result<(), crate::sink::SinkError> {
+        let now_ms = self.clock.now_ms();
+        self.render(bytes, now_ms);
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), crate::sink::SinkError> {
+        Ok(())
+    }
+
+    fn bytes_rendered(&self) -> u64 {
+        self.hash.samples_pushed()
+    }
+
+    fn underruns(&self) -> u64 {
+        self.underruns
+    }
+
+    fn integrity_hash(&self) -> Option<blake3::Hash> {
+        Some(self.hash())
+    }
+}
+
 /// Receiver pipeline shared between the CLI and the loopback tests so both
 /// drive the exact same code path. Transport I/O is injected: the caller
 /// supplies items (datagrams and/or length-prefixed reliable-stream items) via
@@ -537,7 +579,13 @@ pub struct Receiver {
     // NOTE: `adapter` is a `dyn CodecAdapter` that is not `Debug`; the manual
     // `Debug` impl below skips it, so no derive is possible on this struct.
     adapter: Option<Box<dyn CodecAdapter>>,
-    render: NullRenderSink,
+    /// The decoded-canonical-bytes consumer (null render device in the sim; a
+    /// real desktop/mobile shell plugs its output sink in here). Boxed as the
+    /// `RenderSink` seam so the receive half is injectable like the capture
+    /// half — the same golden machinery verifies both.
+    render: Box<dyn RenderSink>,
+    meta: BufferMeta,
+    format_sent: bool,
     metrics: ReceiverMetrics,
     expected_total: Option<u64>,
     ended: bool,
@@ -570,12 +618,21 @@ impl Receiver {
             buffer: JitterBuffer::new(profile.reorder_window(), profile.queue_cap()),
             profile,
             adapter: Some(adapter),
-            render: NullRenderSink::new(clock, max_gap_ms),
+            render: Box::new(NullRenderSink::new(clock, max_gap_ms)),
+            meta,
+            format_sent: false,
             metrics: ReceiverMetrics::default(),
             expected_total: None,
             ended: false,
             stream_id: None,
         })
+    }
+
+    /// Replace the render sink (shells inject their output device here) and
+    /// force a fresh `on_format` on the next rendered block.
+    pub fn set_render_sink(&mut self, sink: Box<dyn RenderSink>) {
+        self.render = sink;
+        self.format_sent = false;
     }
 
     pub fn metrics(&self) -> &ReceiverMetrics {
@@ -639,6 +696,9 @@ impl Receiver {
         self.expected_total = Some(total);
         let frames = self.buffer.drain_all();
         self.render_frames(frames);
+        // End-of-stream: let the render sink flush/finalize its device (the
+        // null device is a no-op; a real output sink commits its tail).
+        let _ = self.render.finish();
         let rendered = self.metrics.packets_recv;
         self.metrics.loss = total.saturating_sub(rendered);
     }
@@ -689,7 +749,19 @@ impl Receiver {
             self.metrics.duplicate = self.metrics.duplicate.saturating_add(frames.len() as u64);
             return;
         };
-        let now = self.render.clock.now_ms();
+        // Announce the decoded output format once, from the stream metadata.
+        if !self.format_sent {
+            let fmt = SinkFormat {
+                sample_rate: self.meta.sample_rate,
+                channels: self.meta.channels,
+                sample_repr: self.meta.sample_repr,
+                channel_layout: self.meta.channel_layout,
+            };
+            self.format_sent = true;
+            if self.render.on_format(fmt).is_err() {
+                self.metrics.malformed += 1;
+            }
+        }
         for frame in frames {
             let decoded = match adapter.decode(&frame.payload) {
                 Ok(d) => d,
@@ -704,19 +776,30 @@ impl Receiver {
             for &s in decoded.iter() {
                 canonical.extend_from_slice(&s.to_le_bytes());
             }
-            self.render.render(&canonical, now);
+            // Render through the seam: the null device hashes + counts
+            // underruns internally; a real sink plays the bytes.
+            if self.render.on_block(&canonical).is_err() {
+                self.metrics.malformed += 1;
+                continue;
+            }
             self.metrics.packets_recv += 1;
             self.metrics.bytes_recv = self.render.bytes_rendered();
         }
         self.adapter = Some(adapter);
-        self.metrics.underruns = self.render.underruns;
+        self.metrics.underruns = self.render.underruns();
     }
 
     /// Finalize and return the outcome (idempotent; no mutation).
     pub fn finalize(&self) -> ReceiverOutcome {
         ReceiverOutcome {
             metrics: self.metrics.clone(),
-            hash: self.render.hash(),
+            // A verifying sink (the null render device) reports its hash; a
+            // non-verifying sink reports the empty-input hash (hash of nothing
+            // rendered — the same value an un-fed HashSink finalizes to).
+            hash: self
+                .render
+                .integrity_hash()
+                .unwrap_or_else(|| blake3::hash(&[])),
             frames_rendered: self.metrics.packets_recv,
         }
     }

@@ -50,21 +50,25 @@ work per callback mechanically enumerable and testable.
   `cargo test -p wdr_rt` SPSC stress tests (overflow returns full; no data race
   under a 2-thread producer/consumer hammer).
 
-### Specified, NOT yet implemented (honest gap — tracked as RISK_REGISTER R16)
-The mechanical guards below are the planned enforcement layer. None exists in
-the tree today (no `panic = "abort"` profile, no `rt-guard` feature, no
-`#[no_std]` in `wdr_rt`, no alloc/lint gate, CI is `if: false`). Land them here
-and reference this section from the commit that does:
-- RT crates compiled with `panic = "abort"` (profile per RT crate).
-- `wdr_rt` `#[cfg(feature="rt-guard")]` global allocator that `abort()`s on
-  **any** allocation made while "in RT context" (a thread-local flag set by a
-  probe at callback entry) — catches accidental allocs in tests/native adapters.
-- Deny `alloc`/`log` symbols in the RT module surface via crate structure +
-  build-time lint (make `wdr_rt` `#[no_std]`-based; RT modules in shells import
-  only `wdr_rt`).
-- CI stress/instrumentation (a watchdog thread that aborts on callback stall +
-  an alloc detector) per TEST_PLAN "instrumentation or stress tests that can detect
-  callback allocation, blocking, priority inversion, excess duration".
+### Runtime enforcement layer — IMPLEMENTED 2026-09-13 (was RISK_REGISTER R16)
+Land with `docs/orchestration/` updates:
+- **`panic = "abort"`** — workspace `[profile.release] panic = "abort"` (Cargo
+  allows `panic` only as a whole-profile option; dev/test profiles keep
+  `unwind`). A panic on an RT thread is a process-level hard fault, never an
+  unwind through a realtime callback.
+- **`wdr_rt` `rt-guard` feature** — `guard.rs` installs a `#[global_allocator]`
+  that forwards to `std::alloc::System`, except while a thread is inside an RT
+  callback context (`RtGuard::enter()` — a nesting-aware RAII probe a platform
+  callback brackets its body with); an allocation there aborts the process at the
+  offending line (cold, never-allocating abort; `RT_DEPTH` is a const-initialized
+  `#[thread_local]` so the allocator reads it safely mid-alloc). Out-of-RT
+  allocation is completely unaffected. Subprocess-verified: a child that
+  allocates inside RT context dies (SIGABRT); out-of-context allocation passes.
+  RT-era binaries opt in via the feature; default builds ship zero overhead.
+- **Remaining (still specified, NOT implemented):** `wdr_rt` as `#[no_std]` +
+  deny-alloc/lint gating of the RT module surface, and CI watchdog/instrumentation
+  (a watchdog thread that aborts on callback stall + an alloc detector) per
+  TEST_PLAN — those stay on the native-RT evidence path (gate §5).
 
 ## 5. Native evidence gate
 WSL2/Docker simulation **cannot** satisfy the native RT evidence gate. Linux RT

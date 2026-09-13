@@ -52,10 +52,12 @@ class EmitterService : Service() {
     /**
      * INTEGRATION POINT for the core wiring task. The shared Rust core's
      * emitter path (encode -> AEAD -> QUIC datagram/stream) will be reached
-     * here via a JNI/binder seam; this shell leaves it null and only counts
-     * blocks for FR-053 status. Network transport is deliberately OUT of scope.
+     * here via a JNI/binder seam; today the shell fills the seam with a real,
+     * host-testable [`FixtureFrameSink`] (see SinkSeam.kt) that counts + CRCs
+     * whole frames and reports FR-053 status. Network transport is deliberately
+     * OUT of scope — a transport sink replaces it behind the same interface.
      */
-    private val frameSink: FrameSink? = null
+    private var frameSink: FixtureFrameSink? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -134,22 +136,28 @@ class EmitterService : Service() {
         blocksCaptured = 0
         capture = adapter.start { pcm, meta ->
             blocksCaptured++
-            // INTEGRATION POINT: frameSink (null here) forwards PCM to the
-            // emitter core. Until wired, blocks are only counted for status.
+            // Seam: FixtureFrameSink accumulates whole frames + CRC up to now
+            // (the network transport sink replaces it behind the same
+            // interface when the FFI wiring lands).
             frameSink?.onBlock(pcm, meta)
             if (blocksCaptured % STATUS_EVERY_BLOCKS == 1L) refreshStatus()
         }
         if (capture == null) {
             updateStatus(lastStatus.copy(state = "ERROR", route = "empty-capture-policy"))
         } else {
+            // Wire the seam with a real sink once the format is stable: format
+            // first, blocks flow through the capture callback, finish on stop.
+            val fmt = capture!!.format
+            frameSink = FixtureFrameSink(fmt)
+            frameSink?.onFormat(fmt)
             updateStatus(
                 lastStatus.copy(
                     state = "STREAMING",
                     transport = "wi-fi",
                     codec = "pcm",
-                    sampleRateHz = capture!!.format.sampleRateHz,
-                    bitDepth = capture!!.format.bitDepth,
-                    channels = capture!!.format.channelCount,
+                    sampleRateHz = fmt.sampleRateHz,
+                    bitDepth = fmt.bitDepth,
+                    channels = fmt.channelCount,
                     route = "app-audio-capture",
                     fidelity = if (policyGate.allowLossless()) "lossless" else "lossy",
                 ),
@@ -184,6 +192,9 @@ class EmitterService : Service() {
     private fun stopCapture() {
         runCatching { capture?.stop() }
         capture = null
+        // End-of-session: the seam's finish() lets the sink commit/flush.
+        frameSink?.finish()
+        frameSink = null
         projectionCallback?.let { cb -> projection?.unregisterCallback(cb) }
         projectionCallback = null
         projection?.let { p ->
@@ -279,18 +290,4 @@ class EmitterService : Service() {
             context.startService(Intent(context, EmitterService::class.java).apply { action = ACTION_STOP_CAPTURE })
         }
     }
-}
-
-/**
- * Frame-transport seam for the emitter core wiring task:
- *
- *   onFormat  — capture format is stable for the session (once, at start).
- *   onBlock   — one captured PCM block (from FramesAvailable).
- *
- * The core (encode -> AEAD -> QUIC datagram/stream) consumes blocks via a JNI/
- * binder seam that the integration task adds. Deliberately no network code here.
- */
-interface FrameSink {
-    fun onFormat(format: Format)
-    fun onBlock(data: ByteArray, meta: FrameMeta)
 }

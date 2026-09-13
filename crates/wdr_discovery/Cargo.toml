@@ -1,0 +1,11 @@
+[package]
+name = "wdr_discovery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "LAN discovery for Wavelink peers over mDNS (`_wdr._tcp`, ADR-006 / FR-003) — advertise + browse with a privacy-minimized TXT record, plus the `wdr_fakes` Discovery seam adapter so shells stay fake-testable."
+
+[dependencies]
+mdns-sd = "0.21.3"
+wdr_fakes = { path = "../wdr_fakes" }

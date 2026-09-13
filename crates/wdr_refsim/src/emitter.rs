@@ -18,11 +18,27 @@
 //! Everything is error-typed; nothing here panics on data.
 
 use rand::{rngs::StdRng, RngExt, SeedableRng as _};
-use wdr_codec::{CodecAdapter, CodecError, FlacAdapter, OpusAdapter, PcmAdapter};
+use wdr_codec::{CodecAdapter, CodecAdapter24, CodecError, FlacAdapter, OpusAdapter, PcmAdapter};
 use wdr_fakes::source::{ChannelKind, Fixture, FixtureKind, PcmSource, SampleFormat};
 use wdr_proto::{ChannelLayout, Codec, Frame, FrameFlags, SampleRepr};
 
 use crate::framing::FrameWire;
+
+/// The adapter an emitter drives, keyed to its sample representation. i16
+/// streams drive the [`CodecAdapter`] surface; 24-bit streams drive
+/// [`CodecAdapter24`] (the optional Adapter is built only for I24Packed).
+/// Keeping the choice explicit means a sample-repr mismatch is a typed error,
+/// never a silent 24→16 down-convert (FR-026).
+enum EmitterAdapter {
+    I16(Box<dyn CodecAdapter>),
+    /// The 24-bit adapter is constructed (proving I24Packed config builds and
+    /// is metadata-correct) but the emitter's i16 frame seam refuses to drive
+    /// it today — `encode_i16_frame` returns a typed error instead of a silent
+    /// downgrade. The payload is dereferenced by the unit tests and by the
+    /// future 24-bit frame path, hence the allow(dead_code) for lib-only builds.
+    #[allow(dead_code)]
+    I24(Box<dyn CodecAdapter24>),
+}
 
 /// Which lane the emitter drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,13 +174,68 @@ pub struct Emitter {
     kind: StreamKind,
     meta: BufferMeta,
     cfg: EmitterConfig,
-    adapter: Box<dyn CodecAdapter>,
+    adapter: EmitterAdapter,
     fixture: Fixture,
     seq: u64,
     rng: StdRng,
     held: Vec<Vec<u8>>,
     packets_sent: u64,
     bytes_sent: u64,
+}
+
+/// Select the codec adapter for a `BufferMeta`, keyed to its sample
+/// representation. i16 drives the [`CodecAdapter`] surface; I24Packed drives
+/// the 24-bit [`CodecAdapter24`] surface (ADR-005 follow-up). F32/I32 remain
+/// declared-but-unimplemented stubs, and Opus is i16-only — both are typed
+/// errors, never a silent re-formatter.
+fn build_adapter(meta: &BufferMeta) -> Result<EmitterAdapter, EmitterError> {
+    match meta.sample_repr {
+        SampleRepr::I16 => {
+            let boxed: Box<dyn CodecAdapter> = match meta.codec {
+                Codec::Flac => Box::new(FlacAdapter::new(meta.sample_rate, meta.channels, 16)?),
+                Codec::Pcm => Box::new(PcmAdapter::new(meta.channels)?),
+                Codec::Opus => Box::new(OpusAdapter::new(
+                    meta.sample_rate,
+                    meta.channels,
+                    wdr_codec::FrameProfile::Ms20,
+                )?),
+            };
+            Ok(EmitterAdapter::I16(boxed))
+        }
+        SampleRepr::I24Packed => {
+            let boxed: Box<dyn CodecAdapter24> = match meta.codec {
+                Codec::Flac => Box::new(FlacAdapter::new(meta.sample_rate, meta.channels, 24)?),
+                Codec::Pcm => Box::new(PcmAdapter::new24(meta.channels)?),
+                Codec::Opus => {
+                    return Err(EmitterError::Format(
+                        "Opus is i16-only (ADR-004); 24-bit sample repr not supported for Opus"
+                            .into(),
+                    ));
+                }
+            };
+            Ok(EmitterAdapter::I24(boxed))
+        }
+        // F32/I32 remain declared-but-unimplemented stubs (ADR-005).
+        other => Err(EmitterError::Format(format!(
+            "sample representation {other:?} is not built by the emitter (ADR-005: i16/i24)"
+        ))),
+    }
+}
+
+/// Encode one whole PCM i16 frame with the emitter's adapter. A 24-bit
+/// adapter driven through the i16 frame seam is a typed error — the 24-bit
+/// codec surface is proven (`CodecAdapter24`), but the emitter's frame seam
+/// carries i16 frames today, so anything else would be a silent downgrade
+/// (FR-026).
+fn encode_i16_frame(adapter: &mut EmitterAdapter, pcm: &[i16]) -> Result<Box<[u8]>, EmitterError> {
+    match adapter {
+        EmitterAdapter::I16(a) => Ok(a.encode(pcm)?),
+        EmitterAdapter::I24(_) => Err(EmitterError::Format(
+            "24-bit emitter frame path is not wired through the i16 frame seam yet \
+             (ADR-005 follow-up; codec-level 24-bit lossless is proven in wdr_codec)"
+                .into(),
+        )),
+    }
 }
 
 impl Emitter {
@@ -175,20 +246,13 @@ impl Emitter {
         cfg: EmitterConfig,
         meta: BufferMeta,
     ) -> Result<Self, EmitterError> {
-        let adapter: Box<dyn CodecAdapter> = match meta.codec {
-            Codec::Flac => Box::new(FlacAdapter::new(meta.sample_rate, meta.channels, 16)?),
-            Codec::Pcm => Box::new(PcmAdapter::new(meta.channels)?),
-            Codec::Opus => Box::new(OpusAdapter::new(
-                meta.sample_rate,
-                meta.channels,
-                wdr_codec::FrameProfile::Ms20,
-            )?),
-        };
+        let adapter = build_adapter(&meta)?;
         let format = match meta.sample_repr {
             SampleRepr::I16 => SampleFormat::I16,
-            // The adapters are i16-only at B0 (ADR-005); the fakes i24 goldens
-            // are recorded but not drivable through these adapters yet.
-            _ => SampleFormat::I16,
+            SampleRepr::I24Packed => SampleFormat::I24,
+            // Unreachable: build_adapter already errored for F32/I32. Kept
+            // exhaustive for the match.
+            _ => return Err(EmitterError::Format("unsupported sample repr".into())),
         };
         let channels = match meta.channel_layout {
             ChannelLayout::Stereo => ChannelKind::Stereo,
@@ -354,7 +418,7 @@ impl Emitter {
     /// same packed bytes (duplication) or advance a new frame. Shared by
     /// `run()` and the live [`AudioFrameSink`](crate::sink::AudioFrameSink).
     fn frame_payload(&mut self, pcm: &[i16]) -> Result<Vec<u8>, EmitterError> {
-        let payload = self.adapter.encode(pcm)?;
+        let payload = encode_i16_frame(&mut self.adapter, pcm)?;
         let frame = self.make_frame(payload.to_vec());
         frame
             .pack()
@@ -492,6 +556,10 @@ impl Emitter {
 pub enum EmitterError {
     Encode(CodecError),
     Send(String),
+    /// Format/configuration not supported by this emitter (e.g. an F32/I32
+    /// sample repr, or a 24-bit path the i16 frame seam cannot drive).
+    /// Raised **before** any bytes are sent — never a silent reformat.
+    Format(String),
     /// The requested transport lane is not granted by the effective
     /// entitlement policy (e.g. lossless under the Free tier, FR-042/FR-043).
     /// Raised **before** any bytes are sent — never a silent premium.
@@ -509,6 +577,7 @@ impl core::fmt::Display for EmitterError {
         match self {
             EmitterError::Encode(e) => write!(f, "emitter encode: {e}"),
             EmitterError::Send(s) => write!(f, "emitter send: {s}"),
+            EmitterError::Format(msg) => write!(f, "emitter format: {msg}"),
             EmitterError::Policy(msg) => write!(f, "emitter policy: {msg}"),
         }
     }
@@ -591,5 +660,75 @@ pub fn wire_meta(codec: Codec, wire_rate: u32, frame_samples: usize) -> BufferMe
         sample_repr: SampleRepr::I16,
         channel_layout: ChannelLayout::Stereo,
         frame_samples,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn i24_meta(codec: Codec) -> BufferMeta {
+        BufferMeta {
+            codec,
+            sample_rate: SIM_RATE_HZ,
+            channels: SIM_CHANNELS,
+            sample_repr: SampleRepr::I24Packed,
+            channel_layout: ChannelLayout::Stereo,
+            frame_samples: 512,
+        }
+    }
+
+    #[test]
+    fn i24_meta_builds_24bit_flac_adapter_and_roundtrips() {
+        let mut adapter = build_adapter(&i24_meta(Codec::Flac)).unwrap();
+        let EmitterAdapter::I24(a) = &mut adapter else {
+            panic!("I24Packed + Flac must build a 24-bit adapter");
+        };
+        let pcm: Vec<i32> = vec![0x007F_FFFF, -0x007F_FFFF, 0x0012_3456, -0x0012_3456];
+        let enc = a.encode_24(&pcm).expect("encode_24");
+        let dec = a.decode_24(&enc).expect("decode_24");
+        assert_eq!(dec, pcm.into_boxed_slice(), "24-bit lossless roundtrip");
+    }
+
+    #[test]
+    fn i24_meta_builds_24bit_pcm_adapter_and_roundtrips() {
+        let mut adapter = build_adapter(&i24_meta(Codec::Pcm)).unwrap();
+        let EmitterAdapter::I24(a) = &mut adapter else {
+            panic!("I24Packed + Pcm must build a 24-bit adapter");
+        };
+        let pcm: Vec<i32> = vec![0, 0x007F_FFFF, -0x007F_FFFF, 1234, -99, 1];
+        let enc = a.encode_24(&pcm).expect("encode_24");
+        assert_eq!(enc.len(), pcm.len() * 3, "3 bytes/sample");
+        let dec = a.decode_24(&enc).expect("decode_24");
+        assert_eq!(dec, pcm.into_boxed_slice());
+    }
+
+    #[test]
+    fn i24_meta_is_a_typed_error_for_opus_and_f32_i32_stubs() {
+        assert!(matches!(
+            build_adapter(&i24_meta(Codec::Opus)),
+            Err(EmitterError::Format(_))
+        ));
+        let mut f32 = i24_meta(Codec::Pcm);
+        f32.sample_repr = SampleRepr::F32;
+        assert!(matches!(build_adapter(&f32), Err(EmitterError::Format(_))));
+        let mut i32r = i24_meta(Codec::Pcm);
+        i32r.sample_repr = SampleRepr::I32;
+        assert!(matches!(build_adapter(&i32r), Err(EmitterError::Format(_))));
+    }
+
+    #[test]
+    fn i16_frame_seam_refuses_24bit_adapter_never_silent_downgrade() {
+        let mut adapter = build_adapter(&i24_meta(Codec::Flac)).unwrap();
+        // Driving a 24-bit adapter through the i16 frame seam is a typed
+        // error — never a silent 24→16 down-convert (FR-026).
+        assert!(matches!(
+            encode_i16_frame(&mut adapter, &[0i16, 1, 2, 3]),
+            Err(EmitterError::Format(_))
+        ));
+        // The i16 seam still works for the i16 adapter.
+        let mut i16_adapter = build_adapter(&BufferMeta::canonical_lossless(Codec::Flac)).unwrap();
+        let out = encode_i16_frame(&mut i16_adapter, &[0i16, 1, 2, 3]).unwrap();
+        assert!(!out.is_empty());
     }
 }

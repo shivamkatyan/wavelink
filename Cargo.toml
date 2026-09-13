@@ -12,3 +12,11 @@ rust-version = "1.98"
 
 [profile.release]
 lto = "thin"
+# RT-contract hardening (RT_CONTRACT.md §4, "panic = abort"): release builds
+# panic by aborting so a panic on an RT audio thread is a process-level hard
+# fault, never an unwind through a real-time callback (which could block,
+# allocate, or corrupt audio state). Cargo permits `panic` only as a whole-
+# profile setting (no per-package override), so this applies to every release
+# binary in the workspace — acceptable for shipping binaries, and the dev/test
+# profiles (where tests run) keep `unwind`.
+panic = "abort"

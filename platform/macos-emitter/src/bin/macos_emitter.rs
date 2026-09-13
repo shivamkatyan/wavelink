@@ -12,6 +12,8 @@
 
 use macos_emitter::backend::permission::{PermissionGate, ScShareableContentProbe};
 #[cfg(target_os = "macos")]
+use macos_emitter::receive::run_receive;
+#[cfg(target_os = "macos")]
 use macos_emitter::stream::run_stream;
 use macos_emitter::{CaptureSource, FakeCaptureSource, FormatMeta};
 
@@ -36,6 +38,17 @@ fn main() {
                 std::process::exit(2);
             }
         }
+        Some("--receive") => {
+            // QUIC emitter stream → core receiver pipeline → RenderSink
+            // (WS3 desktop receiver render path).
+            #[cfg(target_os = "macos")]
+            std::process::exit(run_receive(&argv[1..]));
+            #[cfg(not(target_os = "macos"))]
+            {
+                eprintln!("--receive is macOS-only (Core Audio render path)");
+                std::process::exit(2);
+            }
+        }
         Some("--list-format") => {
             let fmt = format_meta_of_source();
             println!(
@@ -56,8 +69,10 @@ fn main() {
         }
         _ => {
             eprintln!(
-                "usage: macos-emitter [--list-format | --permission-state | --version | --stream <args>]\n\
-                 (packaging entrypoint for the WDR macOS emitter)"
+                "usage: macos-emitter [--list-format | --permission-state | --version | --stream <args> | --receive <args>]\n\
+                 (packaging entrypoint for the WDR macOS emitter)\n\
+                 --stream:  capture/fixture → QUIC receiver (see stream.rs)\n\
+                 --receive: QUIC emitter → RenderSink (see receive.rs)"
             );
             std::process::exit(2);
         }

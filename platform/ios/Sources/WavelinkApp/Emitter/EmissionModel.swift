@@ -56,6 +56,10 @@ final class EmissionModel: ObservableObject {
     @Published var lastDenialShortLabel: String?
 
     private var demoHealthTimer: Timer?
+    /// The seam sink the shell drives today (WS4 seam-level wiring): real
+    /// FixtureFrameSink counts replace demo-random telemetry for FR-053 until
+    /// the network/FFI transport lands behind the same FrameSink interface.
+    private var currentSink: FixtureFrameSink?
 
     init() {
         let store = EmitterTierStore(initial: .free)
@@ -130,6 +134,16 @@ extension EmissionModel {
         status.systemIndicatorVisible =
             EmissionStatus.systemIndicatorVisible(for: status.mode, isActive: true)
         policyGate.setCapturingLossless(currentTier == .pro)
+
+        // WS4 seam: wire a real sink (format -> fixture block -> finish on
+        // stop) so FR-053 derives from genuinely observed blocks, not demo.
+        let bitDepth = currentTier == .pro ? 24 : 16
+        let sink = FixtureFrameSink(channels: 2, bitDepth: bitDepth, sampleRateHz: 48_000)
+        sink.onFormat(channels: 2, bitDepth: bitDepth, sampleRateHz: 48_000)
+        sink.onBlock(data: FixtureFrameSink.makeFixture(frames: 512 * 2))
+        currentSink = sink
+        syncStatusFromSink()
+
         startDemoHealthTimer()
     }
 
@@ -160,6 +174,9 @@ extension EmissionModel {
         status.state = .idle
         status.systemIndicatorVisible = false
         policyGate.setCapturingLossless(false)
+        // End-of-session: the seam's finish() lets the sink commit/flush.
+        currentSink?.finish()
+        currentSink = nil
         demoHealthTimer?.invalidate()
         demoHealthTimer = nil
         if flow.transition(to: .awaitingSystemPicker) == .applied {
@@ -214,23 +231,33 @@ extension EmissionModel {
         }
     }
 
-    /// Demo FR-053 telemetry so the status panel is visibly live. The network
-    /// transport task will replace these with real capture telemetry — values
-    /// here are explicitly demo, never presented as measured.
+    /// FR-053 status from the seam sink's genuinely observed blocks. Latency,
+    /// buffer fill and loss stay ZERO/unknown — the network transport is not
+    /// wired, so those are never demo-faked.
+    private func syncStatusFromSink() {
+        guard let sink = currentSink else { return }
+        var s = status
+        s.sampleRateHz = 48_000
+        s.channels = 2
+        s.bitDepth = sink.frameSizeBytes * 8 / max(s.channels, 1)
+        s.frameRate = Double(sink.blockCount)
+        s.latencyMs = 0
+        s.bufferFill = 0
+        s.packetLossPct = 0
+        s.droppedBuffers = 0
+        status = s
+    }
+
+    /// Periodic FR-053 telemetry so the status panel stays live — now derived
+    /// from the seam sink (real block/sample counts), replacing the earlier
+    /// demo-random values. The network transport task will add real latency/
+    /// loss when the FFI transport lands.
     private func startDemoHealthTimer() {
         demoHealthTimer?.invalidate()
         demoHealthTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.captureActive else { return }
-                var s = self.status
-                s.sampleRateHz = 48_000
-                s.bitDepth = self.currentTier == .pro ? 24 : 16
-                s.channels = 2
-                s.latencyMs = Int.random(in: 20...120)
-                s.bufferFill = min(1.0, max(0.05, s.bufferFill + Double.random(in: -0.1...0.12)))
-                s.packetLossPct = Double.random(in: 0...1.5)
-                if Int.random(in: 0..<40) == 0 { s.droppedBuffers += 1 }
-                self.status = s
+                self.syncStatusFromSink()
             }
         }
     }

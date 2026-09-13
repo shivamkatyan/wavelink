@@ -4,8 +4,10 @@
 //!
 //! # Design notes
 //!
-//! * All adapters take interleaved `i16` PCM (len multiple of channels) and
-//!   return encoded frame bytes; decode returns interleaved `i16`.
+//! * All **i16** adapters take interleaved `i16` PCM (len multiple of
+//!   channels) and return encoded frame bytes; decode returns interleaved
+//!   `i16`. 24-bit lossless rides the parallel [`CodecAdapter24`] trait over
+//!   right-aligned `i32` (canonical `wdr_fakes` 24-bit form).
 //! * **Integrity** — the lossless adapters (FLAC/PCM) expose the raw frame
 //!   bytes to a CRC-32 ([`crate::frame_crc32`]); the lossy path (Opus) relies
 //!   on the frame container's AEAD tag instead. The `CodecAdapter::encode`
@@ -61,15 +63,16 @@ impl core::fmt::Display for CodecKind {
 
 /// Sample representation for the codec path (mirrors PROTOCOL_SPEC/`
 /// `wdr_proto::SampleRepr`, kept local so `wdr_codec` stays decoupled at B0).
-/// `I16` is implemented; the rest are future stubs (ADR-005 focuses 16/24-bit
-/// first) and return [`CodecError::Unsupported`].
+/// `I16` and `I24Packed` are implemented (ADR-005 16/24-bit); `F32`/`I32`
+/// remain future stubs that return [`CodecError::Unsupported`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SampleRepr {
     /// 16-bit signed little-endian interleaved samples (implemented).
     I16,
     /// 32-bit float — *future stub* (returns `Unsupported`).
     F32,
-    /// 24-bit packed (3 bytes/sample) — *future stub* (returns `Unsupported`).
+    /// 24-bit packed (3 bytes/sample) — implemented via [`CodecAdapter24`]
+    /// (the canonical `wdr_fakes` i32-by-value / low-3-bytes form).
     I24Packed,
     /// 32-bit signed integer — *future stub* (returns `Unsupported`).
     I32,
@@ -88,18 +91,14 @@ impl SampleRepr {
     }
 
     /// Map the protocol-facing representation to a supported adapter
-    /// representation; the stubs return `Unsupported`.
+    /// representation; the remaining stubs return `Unsupported`.
     pub fn validate(self) -> Result<(), CodecError> {
         match self {
             SampleRepr::I16 => Ok(()),
             SampleRepr::F32 => Err(CodecError::Unsupported(
                 "F32 sample representation is a future stub (ADR-005: 16/24-bit first)".into(),
             )),
-            SampleRepr::I24Packed => Err(CodecError::Unsupported(
-                "I24Packed sample representation is a future stub (24-bit plays through \
-                 the TPDF-dither path for now; ADR-005)"
-                    .into(),
-            )),
+            SampleRepr::I24Packed => Ok(()),
             SampleRepr::I32 => Err(CodecError::Unsupported(
                 "I32 sample representation is a future stub (ADR-005)".into(),
             )),
@@ -122,6 +121,35 @@ pub trait CodecAdapter {
 
     /// Decode a codec payload back into interleaved `i16` PCM.
     fn decode(&mut self, bytes: &[u8]) -> Result<Box<[i16]>, CodecError>;
+
+    /// Human-readable codec name (logs / capability negotiation).
+    fn name(&self) -> &'static str;
+}
+
+/// The 24-bit codec-adaptation interface (ADR-005 follow-up).
+///
+/// Same contract as [`CodecAdapter`] but over interleaved **24-bit** `i32`
+/// PCM in the canonical `wdr_fakes` form: right-aligned values in
+/// `[-(2^23)+1, 2^23-1)`, packed 3 bytes/sample little-endian on the wire
+/// (low 3 bytes, top byte stripped). Lossless means sample-identical —
+/// `hash(decoded) == hash(source)` with no tolerance.
+///
+/// Kept as a **separate trait** so the i16 adapters and their tests stay
+/// untouched: opting in to 24-bit is explicit, and Opus stays i16-only.
+/// The FLAC/PCM adapters expose both sides — `PcmAdapter::new24` /
+/// `FlacAdapter::new(.., 24)` construct a 24-bit-capable adapter; calling
+/// the wrong-depth methods on it returns a typed [`CodecError::Unsupported`]
+/// rather than silently down-converting.
+pub trait CodecAdapter24 {
+    /// Which codec this adapter wraps.
+    fn kind(&self) -> CodecKind;
+
+    /// Encode a frame of interleaved 24-bit `i32` PCM (length multiple of the
+    /// adapter's channel count) into codec payload bytes.
+    fn encode_24(&mut self, pcm: &[i32]) -> Result<Box<[u8]>, CodecError>;
+
+    /// Decode a codec payload back into interleaved 24-bit `i32` PCM.
+    fn decode_24(&mut self, bytes: &[u8]) -> Result<Box<[i32]>, CodecError>;
 
     /// Human-readable codec name (logs / capability negotiation).
     fn name(&self) -> &'static str;
@@ -155,12 +183,10 @@ mod tests {
     }
 
     #[test]
-    fn sample_repr_stubs_return_unsupported() {
+    fn sample_repr_implemented_vs_stubs() {
         assert!(matches!(SampleRepr::I16.validate(), Ok(())));
-        assert!(matches!(
-            SampleRepr::I24Packed.validate(),
-            Err(CodecError::Unsupported(_))
-        ));
+        // 24-bit is implemented via `CodecAdapter24` (ADR-005 follow-up).
+        assert!(matches!(SampleRepr::I24Packed.validate(), Ok(())));
         assert!(matches!(
             SampleRepr::F32.validate(),
             Err(CodecError::Unsupported(_))

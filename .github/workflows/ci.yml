@@ -1,11 +1,13 @@
 # WDR CI — enabled core jobs + platform gates.
 #
-# ENABLED (2026-09-13): linux-core, macos-shell, android-emulator now run on
-# hosted runners (bootstrap is stable; macos-26 validated by the 0.0.1 release;
-# android-emulator is a real gradle unit-test run). The two remaining jobs are
-# echo-only placeholders and stay `if: false` until real wiring lands:
-#   - windows-basic (~wasapi compile smoke)  -> B2 windows-basic real steps
-#   - ios-simulator                          -> B4 ios-simulator real steps
+# ENABLED (2026-09-13): linux-core, macos-shell, android-emulator, and — as real
+# steps replacing the old echo placeholders — windows-basic and ios-simulator:
+#   - windows-basic: core build + the win-emitter portable surface (WASAPI
+#     behind #[cfg(windows)]) tested on a windows runner (the only place the
+#     Windows EXE can link, per CLAUDE.md).
+#   - ios-simulator: the merged Wavelink app's simulator-SDK type-check gate
+#     (0 errors, -warnings-as-errors) — the repo intentionally holds no
+#     `.xcodeproj`, so device/signing/.ipa stays Xcode/credential-gated.
 # reference-sim.yml stays disabled separately — it needs a NET_ADMIN-capable
 # self-hosted runner, not a hosted runner.
 
@@ -48,22 +50,27 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
   # ===========================================================================
-  # windows-basic — Windows compile smoke; WASAPI capture/render validation is
-  # a platform-feasibility stub (TODO in B2: virtual WASAPI endpoint + endpoint
-  # probe on a Windows self-hosted/audio-enabled runner).
-  # DISABLED until a Windows runner with the virtual-endpoint plan exists.
+  # windows-basic — Windows compile + portable-surface smoke (WASAPI capture/
+  # render validation is a later device-covered platform-feasibility item; the
+  # Windows EXE can only link on a Windows runner, so this is the real surface
+  # here). ENABLED 2026-09-13 (real steps replacing the echo placeholder).
   # ===========================================================================
   windows-basic:
-    if: false
     runs-on: windows-2025
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: TODO(WASAPI) — compile smoke placeholder
-        run: |
-          echo "windows compile/cargo smoke — wired in B2 with WASAPI capture/render probes."
-          echo "placeholder only; job gated off via if:false."
+      - name: Install stable toolchain (workspace pin)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Build workspace (core, native Windows target)
+        run: cargo build --workspace
+
+      - name: win-emitter portable surface + WASAPI-backend compile + unit tests
+        run: cargo test --manifest-path platform/win-emitter/Cargo.toml
 
   # ===========================================================================
   # macos-shell — macOS + iOS compile / permission-state units for the platform
@@ -151,17 +158,24 @@ jobs:
           true
 
   # ===========================================================================
-  # ios-simulator — UI/lifecycle/protocol/fake-audio on an iOS simulator
-  # (no real capture/USB). macos runner. DISABLED until Xcode pins + scheme exist.
+  # ios-simulator — the merged Wavelink app's simulator-SDK type-check gate
+  # (0 errors, -warnings-as-errors). No .xcodeproj/scheme is shipped by design
+  # (scripts/package/ios.sh: xcodegen wrapper is the recorded path; device/
+  # signing/.ipa remains Xcode/credential-gated). ENABLED 2026-09-13 as the
+  # hard gate that macos-shell runs soft-gated.
   # ===========================================================================
   ios-simulator:
-    if: false
     runs-on: macos-26
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: TODO(iOS) — simulator-safe smoke placeholder
+      - name: Install stable toolchain (workspace pin)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: iOS merged app type-check against iPhoneSimulator SDK (no device)
         run: |
-          echo "iOS simulator UI/lifecycle/fake-audio smoke wired in B4."
-          echo "placeholder only; job gated off via if:false."
+          cd platform/ios && xcrun -sdk iphonesimulator swiftc -target arm64-apple-ios14.0-simulator -parse-as-library -typecheck -warnings-as-errors Sources/WavelinkApp/*.swift Sources/WavelinkApp/Shared/*.swift Sources/WavelinkApp/Emitter/*.swift Sources/WavelinkApp/Receiver/*.swift
+          echo "(merged Wavelink iOS app type-check gate = 0 errors; signed .ipa still Xcode/credential-gated)"

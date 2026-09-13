@@ -59,3 +59,28 @@ harness re-validated under Docker Desktop on this host.
 Method honesty (unchanged): simulated clean soak on the Docker reference
 system; not a physical-device soak. Physical long-duration/battery/thermal
 remains a hardware gate.
+
+---
+
+# B1 clean soak — re-run on macOS host after the i24/rt-guard/receiver-seam batch (2026-09-13)
+
+Re-run of the FULL 60-min clean soak on this macOS host under Docker Desktop,
+after the WS1/WS2/WS3 core changes (24-bit codec adapter, `rt-guard` +
+`panic=abort`, receiver `RenderSink` seam) — proving the reference behaviour is
+unchanged by the new work.
+
+- **FULL 60-min clean soak PASS (2026-09-13, macOS host):** emitter exit 0
+  status ok · receiver complete · **underruns 0 · fatal 0** · **lossless FLAC
+  hash preserved (`22153f00…` — identical to the previous macOS and WSL2 full-soak
+  hashes, cross-host cross-batch determinism)**. `bootstrap-netem.sh` profile
+  suite ALSO passed: all 7 profiles (clean/loss0.5/loss1/loss5/jitter30/
+  reorder/duplication) green with asserts.
+- RSS over run: 62 samples, min 1.54 MiB, max 4.83 MiB — flat, no unbounded
+  growth. No crash, no deadlock, no underrun (ran to clean completion).
+
+Method honesty (unchanged): simulated clean soak on the Docker reference
+system; not a physical-device soak. Physical long-duration/battery/thermal
+remains a hardware gate (HARDWARE_VALIDATION.md).
+
+Evidence: `/tmp/opencode/soak-result.json` (result=PASS, soak_seconds=3600) +
+`/tmp/opencode/soak-rss.log` + `/tmp/opencode/ws6-bootstrap.log` (7/7 profiles).

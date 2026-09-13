@@ -68,6 +68,13 @@ pub mod backend;
 #[cfg(target_os = "macos")]
 pub mod stream;
 
+/// The `--receive` driver (WS3 desktop receiver render): `QuicRenderReceiver`
+/// seam → a selectable `RenderSink` (null hash sink on the host; the
+/// device-gated Core Audio output sink on real hardware). macOS-only.
+/// See `bin/macos_emitter.rs` / `receive.rs`.
+#[cfg(target_os = "macos")]
+pub mod receive;
+
 /// Capture/format metadata for the selected endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FormatMeta {

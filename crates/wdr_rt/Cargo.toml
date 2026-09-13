@@ -5,3 +5,11 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Real-time contract primitives: lock-free SPSC ring for platform RT audio callbacks (task t-P1-rt)."
+
+[features]
+# Runtime enforcement of the RT contract (RT_CONTRACT.md §4): installs a
+# process-wide `#[global_allocator]` that aborts on any heap allocation made
+# inside an RT-callback context (marked with `RtGuard::enter()`). Off by
+# default so the leaf crate stays allocation-agnostic; platform RT-era
+# binaries opt in so a contract violation fails loud at the offending line.
+rt-guard = []
