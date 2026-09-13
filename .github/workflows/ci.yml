@@ -1,10 +1,13 @@
-# WDR CI skeleton — gated/disabled for now.
+# WDR CI — enabled core jobs + platform gates.
 #
-# ALL JOBS BELOW CARRY `if: false` — they are DISABLED and will NOT run until
-# credentials and/or self-hosted runner capabilities are available (hosted
-# runners lack audio endpoints; see DEVELOPMENT_ENVIRONMENT.md §Native runners).
-# Enable each by flipping its `if: false` to `if: true` (or removing it) in B0+
-# once the referenced capabilities exist. Keep this file green-skippable.
+# ENABLED (2026-09-13): linux-core, macos-shell, android-emulator now run on
+# hosted runners (bootstrap is stable; macos-26 validated by the 0.0.1 release;
+# android-emulator is a real gradle unit-test run). The two remaining jobs are
+# echo-only placeholders and stay `if: false` until real wiring lands:
+#   - windows-basic (~wasapi compile smoke)  -> B2 windows-basic real steps
+#   - ios-simulator                          -> B4 ios-simulator real steps
+# reference-sim.yml stays disabled separately — it needs a NET_ADMIN-capable
+# self-hosted runner, not a hosted runner.
 
 name: ci
 
@@ -18,10 +21,10 @@ env:
 jobs:
   # ===========================================================================
   # linux-core — core/protocol + Linux adapters on a standard runner.
-  # DISABLED until bootstrap is stable on the hosted runner image.
+  # ENABLED 2026-09-13: bootstrap + build + wdr_dev + clippy verified green
+  # locally (clippy -D warnings clean); runs on every push/PR.
   # ===========================================================================
   linux-core:
-    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -65,12 +68,11 @@ jobs:
   # ===========================================================================
   # macos-shell — macOS + iOS compile / permission-state units for the platform
   # shells. Compile-level only (no TCC capture, no .usbAudio device) — safe on
-  # a hosted macOS runner; exact commands were validated on a macOS host
-  # (Xcode 26.6, Rust 1.98.1) on 2026-09-10.
-  # Toggle `if: false` → run when a macOS runner/Xcode pin is available.
+  # a hosted macOS runner; exact commands validated on a macOS host
+  # (Xcode 26.6, Rust 1.98.1) on 2026-09-10 and by the 0.0.1 macos job.
+  # ENABLED 2026-09-13.
   # ===========================================================================
   macos-shell:
-    if: false
     runs-on: macos-26
     steps:
       - name: Checkout
@@ -109,10 +111,11 @@ jobs:
   # ===========================================================================
   # android-emulator — lifecycle/UI/permissions/network/codec/fake-audio on an
   # Android emulator (no USB audio). Uses the android-emulator-runner composite
-  # action. DISABLED until emulator runner + API level are pinned.
+  # action. ENABLED 2026-09-13 — currently a real gradle :app:testDebugUnitTest
+  # run (soft gate, `|| true` until emulator features are pinned); no emulator
+  # boots yet.
   # ===========================================================================
   android-emulator:
-    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

@@ -81,7 +81,7 @@ A platform **RT audio callback may only** copy bytes in/out of `wdr_rt::spsc::Sp
 - **`docs/planning/` is the source of truth**: ARCHITECTURE, PROTOCOL_SPEC, ADRS/001–010, PLATFORM_MATRIX, RT_CONTRACT, SECURITY_SPEC, TEST_PLAN, RISK_REGISTER, and the FR-by-FR honest status audit in REQUIREMENTS_TRACEABILITY.md (✅/🟡/🔒/🚫/⬜).
 - **`docs/orchestration/` tracks gates**: RELEASE_STATUS, QUALITY_DASHBOARD, PACKAGING, ACCEPTANCE_CHECKLIST, DECISION_LOG, plus `reports/` and `incidents/`.
 - Hardware/SLO claims (real capture on hardware, native RT timing, signing/notarization, USB-DAC hotplug, bit-perfect loopback) are **external gates that cannot be satisfied on any single host** — never mark them done without evidence. A "pending gate" is allowed only with its runbook (HARDWARE_VALIDATION.md / RELEASE_AND_SIGNING.md). Mark simulated runs as simulated.
-- Most CI jobs (ci.yml, license-audit.yml, reference-sim.yml) are deliberately `if: false` until a self-hosted runner/credentials exist; release.yml and pages.yml are live. Read the workflow headers before "fixing" the disabled ones.
+- CI status (2026-09-13): **live** — `pages.yml` (deployed), `release.yml` (v0.0.1), `ci.yml` (`linux-core` + `macos-shell` + `android-emulator` on hosted runners), `license-audit.yml` (enabled with the explicit PR/dispatch/tag-push predicate). Still **gated off**: `ci.yml`'s `windows-basic`/`ios-simulator` (echo placeholders until their real steps land) and `reference-sim.yml` (needs a NET_ADMIN-capable self-hosted runner — it cannot run on GitHub-hosted runners). Read the workflow headers before "fixing" the disabled ones.
 
 ## Conventions
 
