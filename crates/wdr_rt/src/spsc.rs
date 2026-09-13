@@ -4,8 +4,10 @@
 //! The buffer is allocated exactly once ([`SpscRing::with_capacity`]) off the
 //! RT path; [`SpscRing::try_push`] and [`SpscRing::try_pop_exact`] perform only
 //! atomic loads/stores and byte copies — no allocation, no locks, no syscalls,
-//! no blocking.
+//! no blocking. `#![no_std]`: the single allocation (`with_capacity`) is the
+//! only `alloc` use in this module (`alloc::boxed::Box` / `alloc::vec::Vec`).
 
+use alloc::{boxed::Box, vec::Vec};
 use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 /// Bounded, lock-free, single-producer / single-consumer byte ring.
