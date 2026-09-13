@@ -2360,6 +2360,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "wdr_codec",
+ "wdr_crypto",
  "wdr_discovery",
  "wdr_entitlement",
  "wdr_fakes",

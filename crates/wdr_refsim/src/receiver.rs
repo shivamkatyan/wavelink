@@ -99,6 +99,12 @@ pub struct ReceiverMetrics {
     pub fatal_count: u64,
     pub underruns: u64,
     pub bytes_recv: u64,
+    /// The lane was secured (WS-D): every media frame was AEAD-authenticated
+    /// before render.
+    pub secured: bool,
+    /// Frames dropped for an AEAD replay/auth failure (never rendered, never a
+    /// silent accept).
+    pub sec_rejected: u64,
 }
 
 /// Whether (and how) drift correction was applied on a run (FR-024; ADR-007).
@@ -835,6 +841,19 @@ impl Receiver {
     }
 
     fn ingest_frame(&mut self, frame: Frame) -> Result<(), ReceiverError> {
+        guard_frame(&frame)?;
+        self.ingest_frame_post_guard(frame)
+    }
+
+    /// Ingest a frame that was already guarded on its wire form — the secure
+    /// lane (WS-D) validates the CRC over the ciphertext, decrypts, then calls
+    /// this: the decrypted payload must NOT be re-guarded, because its CRC
+    /// field covers the wire ciphertext.
+    pub(crate) fn ingest_guarded_frame(&mut self, frame: Frame) -> Result<(), ReceiverError> {
+        self.ingest_frame_post_guard(frame)
+    }
+
+    fn ingest_frame_post_guard(&mut self, frame: Frame) -> Result<(), ReceiverError> {
         if let Some(sid) = self.stream_id {
             if sid != frame.stream_id {
                 self.metrics.late_discard += 1;
@@ -843,8 +862,6 @@ impl Receiver {
         } else {
             self.stream_id = Some(frame.stream_id);
         }
-
-        guard_frame(&frame)?;
 
         let ready = self.buffer.push(frame);
         self.render_frames(ready);

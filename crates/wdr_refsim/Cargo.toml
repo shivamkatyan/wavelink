@@ -45,6 +45,7 @@ rcgen = "0.14.0"
 
 wdr_proto = { path = "../wdr_proto" }
 wdr_codec = { path = "../wdr_codec" }
+wdr_crypto = { path = "../wdr_crypto" }
 wdr_fakes = { path = "../wdr_fakes" }
 wdr_entitlement = { path = "../wdr_entitlement" }
 wdr_transport = { path = "../wdr_transport" }

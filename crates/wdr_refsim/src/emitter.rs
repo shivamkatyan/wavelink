@@ -178,6 +178,9 @@ pub struct Emitter {
     held: Vec<Vec<u8>>,
     packets_sent: u64,
     bytes_sent: u64,
+    /// Optional secure lane (WS-D): when set, every media frame payload is
+    /// sealed with `AEAD(seq, payload)` before packing (CRC covers ciphertext).
+    secure: Option<crate::secure::SecureSession>,
 }
 
 /// Select the codec adapter for a `BufferMeta`, keyed to its sample
@@ -291,6 +294,7 @@ impl Emitter {
             held: Vec::new(),
             packets_sent: 0,
             bytes_sent: 0,
+            secure: None,
         })
     }
 
@@ -321,6 +325,14 @@ impl Emitter {
     /// `on_format` rebuild).
     pub fn conn_handle(&self) -> quinn::Connection {
         self.conn.clone()
+    }
+
+    /// Enable the secure lane (WS-D): seals every media frame payload with
+    /// `AEAD(seq, payload)` before packing (CRC then covers ciphertext). The
+    /// handshake has already completed before this is called (the sink runs
+    /// `secure::initiator_handshake` and hands the session in).
+    pub fn set_secure(&mut self, session: crate::secure::SecureSession) {
+        self.secure = Some(session);
     }
 
     /// Number of audio frames (packets) actually sent (incl. duplicates).
@@ -436,7 +448,12 @@ impl Emitter {
     /// same packed bytes (duplication) or advance a new frame. Shared by
     /// `run()` and the live [`AudioFrameSink`](crate::sink::AudioFrameSink).
     fn frame_payload(&mut self, pcm: &[i16]) -> Result<Vec<u8>, EmitterError> {
-        let payload = encode_i16_frame(&mut self.adapter, pcm)?;
+        let mut payload = encode_i16_frame(&mut self.adapter, pcm)?;
+        if let Some(sec) = &mut self.secure {
+            let sealed = crate::secure::seal_frame(sec, self.seq, &payload)
+                .map_err(|e| EmitterError::Send(format!("secure seal: {e}")))?;
+            payload = sealed.into_boxed_slice();
+        }
         let frame = self.make_frame(payload.to_vec());
         frame
             .pack()
@@ -463,7 +480,12 @@ impl Emitter {
     /// not advance `self.seq`, mirroring [`Self::frame_payload`] (the live
     /// 24-bit lane; no fixture path drives this).
     fn frame_payload_24(&mut self, pcm: &[i32]) -> Result<Vec<u8>, EmitterError> {
-        let payload = encode_i24_frame(&mut self.adapter, pcm)?;
+        let mut payload = encode_i24_frame(&mut self.adapter, pcm)?;
+        if let Some(sec) = &mut self.secure {
+            let sealed = crate::secure::seal_frame(sec, self.seq, &payload)
+                .map_err(|e| EmitterError::Send(format!("secure seal: {e}")))?;
+            payload = sealed.into_boxed_slice();
+        }
         let frame = self.make_frame(payload.to_vec());
         frame
             .pack()

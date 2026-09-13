@@ -36,6 +36,7 @@ pub mod emitter;
 pub mod framing;
 pub mod receiver;
 pub mod receiver_server;
+pub mod secure;
 pub mod sink;
 
 pub use emitter::{

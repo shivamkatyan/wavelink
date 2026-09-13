@@ -23,7 +23,6 @@ use wdr_proto::{ChannelLayout, Codec, SampleRepr};
 
 use crate::emitter::{lane_and_meta, policy_gate, wire_meta_repr, Emitter, EmitterError};
 use crate::receiver::{BufferProfile, ReceiverError, ReceiverOutcome};
-
 /// Stable capture/format metadata delivered once (the Android
 /// `FrameSink.onFormat` analogue). Declared by the shell once the format is
 /// stable, before the first block.
@@ -185,6 +184,45 @@ impl QuicRenderReceiver {
             .spawn(move || {
                 let outcome = rt.block_on(crate::receiver_server::run_listener(
                     endpoint, profile, sink,
+                ));
+                let _ = tx.send(outcome);
+            })
+            .map_err(|e| SinkError::Send(format!("spawn receive thread: {e}")))?;
+        Ok(Self { rx, local_addr })
+    }
+
+    /// [`QuicRenderReceiver::listen`] over the **secure** lane (WS-D): completes
+    /// the Noise XX responder handshake on the first magic-carrying stream and
+    /// AEAD-opens every media frame before render. `peer_fingerprint: None`
+    /// accepts what the emitter presents.
+    pub fn listen_secure(
+        addr: SocketAddr,
+        profile: BufferProfile,
+        sink: Box<dyn RenderSink + Send>,
+        peer_fingerprint: Option<[u8; 32]>,
+        identity: wdr_crypto::identity::IdentityKeyPair,
+    ) -> Result<Self, SinkError> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| SinkError::Send(format!("tokio runtime: {e}")))?;
+        let config = crate::receiver_server::loopback_server_config();
+        let endpoint = rt
+            .block_on(async move { quinn::Endpoint::server(config, addr) })
+            .map_err(|e| SinkError::Send(format!("quinn bind {addr}: {e}")))?;
+        let local_addr = endpoint
+            .local_addr()
+            .map_err(|e| SinkError::Send(format!("endpoint local_addr: {e}")))?;
+        let params = crate::secure::SecureParams {
+            identity,
+            expected_peer_fingerprint: peer_fingerprint,
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("wdr-receive-secure".to_string())
+            .spawn(move || {
+                let outcome = rt.block_on(crate::receiver_server::run_listener_secure(
+                    endpoint, profile, sink, params,
                 ));
                 let _ = tx.send(outcome);
             })
@@ -381,6 +419,41 @@ impl QuicAudioSink {
             values_per_frame: plan.frame_samples * fmt.channels as usize,
             acc: Vec::new(),
         })
+    }
+
+    /// Dial `addr` over the **secure** lane (WS-D): completes a Noise XX
+    /// pairing handshake with the receiver (optionally pinning its fingerprint),
+    /// then every media frame payload is AEAD-sealed before emission. The
+    /// secure lane is **reliable/lossless-only** this phase — Opus-lossy is
+    /// refused (index divergence on reordered datagrams is a recorded
+    /// follow-up). `peer_fingerprint: None` accepts what the receiver presents
+    /// (fingerprint pinning is then recorded from the handshake).
+    pub fn connect_secure(
+        addr: &str,
+        tier: Tier,
+        codec: Codec,
+        peer_fingerprint: Option<[u8; 32]>,
+        identity: wdr_crypto::identity::IdentityKeyPair,
+    ) -> Result<Self, SinkError> {
+        if codec == Codec::Opus {
+            return Err(SinkError::Format(
+                "secure lane is reliable/lossless-only this phase (Opus-lossy + \
+                 AEAD index divergence is a recorded follow-up)"
+                    .into(),
+            ));
+        }
+        let mut sink = Self::connect_with_format(addr, tier, codec, SinkFormat::canonical())?;
+        let params = crate::secure::SecureParams {
+            identity,
+            expected_peer_fingerprint: peer_fingerprint,
+        };
+        let conn = sink.emitter.conn_handle();
+        let session = sink
+            .rt
+            .block_on(crate::secure::initiator_handshake(&conn, params))
+            .map_err(|e| SinkError::Send(format!("secure handshake: {e}")))?;
+        sink.emitter.set_secure(session);
+        Ok(sink)
     }
 
     /// Whole-frame value count this sink accumulates to (`frame_samples ×

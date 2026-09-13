@@ -255,6 +255,152 @@ pub async fn run_listener(
     run_lane(&conn, use_stream, first_bytes, profile, sink).await
 }
 
+/// Securely open one frame (wire CRC already validated over the ciphertext)
+/// and ingest it. An AEAD replay/auth failure drops the frame and counts it —
+/// never rendered, never a silent accept.
+fn ingest_secure(
+    receiver: &mut Receiver,
+    session: &mut crate::secure::SecureSession,
+    frame: Frame,
+) {
+    if let Err(e) = guard_frame(&frame) {
+        eprintln!("[receiver-server] secure frame guard failed: {e}");
+        receiver.metrics_mut().malformed += 1;
+        return;
+    }
+    match crate::secure::open_frame(session, frame.seq, &frame.payload) {
+        Ok(pt) => {
+            let mut f = frame;
+            f.payload = pt;
+            let _ = receiver.ingest_guarded_frame(f);
+        }
+        Err(e) => {
+            receiver.metrics_mut().sec_rejected += 1;
+            eprintln!("[receiver-server] secure frame rejected: {e}");
+        }
+    }
+}
+
+/// Run the receive loop over the **secure** reliable lane (WS-D): the Noise XX
+/// handshake has already completed (responder side), so every length-prefixed
+/// frame item's payload is AEAD-opened after the wire-CRC guard, before it
+/// enters the pipeline. Secure lane is lossless-only by construction.
+pub async fn run_lane_secure(
+    conn: &quinn::Connection,
+    first_bytes: Vec<u8>,
+    profile: BufferProfile,
+    sink: Box<dyn RenderSink + Send>,
+    mut session: crate::secure::SecureSession,
+) -> Result<ReceiverOutcome, ReceiverError> {
+    let first_item = FrameWire::parse(&first_bytes)?;
+    let frame = match first_item {
+        FramedItem::Audio(f) => f,
+        FramedItem::End { .. } => {
+            return Err(ReceiverError::Internal(
+                "first secure frame cannot be End".into(),
+            ))
+        }
+    };
+    guard_frame(&frame)?;
+    let meta = sniff_meta(&frame);
+    let mut receiver = Receiver::for_stream(meta, profile, ClockHandle::system(), 0)?;
+    receiver.set_render_sink(sink);
+    receiver.metrics_mut().secured = true;
+
+    let mut first = frame;
+    first.payload = crate::secure::open_frame(&mut session, first.seq, &first.payload)
+        .map_err(|e| ReceiverError::Internal(format!("secure open first frame: {e}")))?;
+    receiver.ingest_guarded_frame(first)?;
+    if receiver.ended() {
+        return Ok(receiver.finalize());
+    }
+
+    loop {
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(END_POLL_MS),
+            conn.accept_bi(),
+        )
+        .await
+        {
+            Ok(Ok((_, mut recv))) => {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let n = tokio::time::timeout(
+                        std::time::Duration::from_millis(END_POLL_MS),
+                        recv.read(&mut chunk),
+                    )
+                    .await
+                    .map_err(|_| ReceiverError::EndTimeout)?
+                    .map_err(|_f| ReceiverError::EndTimeout)?;
+                    match n {
+                        Some(0) | None => break,
+                        Some(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                    let (items, err) = FrameWire::take_stream_items(&mut buf);
+                    if let Some(e) = err {
+                        receiver.metrics_mut().malformed += 1;
+                        eprintln!("[receiver-server] dropped malformed stream item: {e}");
+                    }
+                    for item in items {
+                        match item {
+                            FramedItem::Audio(frame) => {
+                                ingest_secure(&mut receiver, &mut session, frame);
+                            }
+                            FramedItem::End { total_frames } => {
+                                receiver.ingest_end_marker(total_frames);
+                            }
+                        }
+                    }
+                    if receiver.ended() {
+                        return Ok(receiver.finalize());
+                    }
+                }
+            }
+            Ok(Err(_)) => return Err(ReceiverError::Internal("accept_bi failed".into())),
+            Err(_) => return Err(ReceiverError::EndTimeout),
+        }
+    }
+}
+
+/// Accept **one** emitter connection and run the secure lane: complete the
+/// Noise XX responder handshake on the first magic-carrying stream, then let
+/// [`run_lane_secure`] decrypt + render every frame.
+pub async fn run_listener_secure(
+    endpoint: quinn::Endpoint,
+    profile: BufferProfile,
+    sink: Box<dyn RenderSink + Send>,
+    params: crate::secure::SecureParams,
+) -> Result<ReceiverOutcome, ReceiverError> {
+    let peer_wait = std::env::var("WDR_PEER_WAIT_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    let incoming = match peer_wait {
+        0 => endpoint.accept().await,
+        secs => tokio::time::timeout(std::time::Duration::from_secs(secs), endpoint.accept())
+            .await
+            .map_err(|_| ReceiverError::EndTimeout)?,
+    }
+    .ok_or_else(|| ReceiverError::Internal("accept returned None".into()))?;
+    let conn = incoming
+        .accept()
+        .map_err(|_| ReceiverError::Internal("incoming accept failed".into()))?
+        .await
+        .map_err(|_| ReceiverError::Internal("handshake failed".into()))?;
+
+    let session = crate::secure::responder_handshake(&conn, params)
+        .await
+        .map_err(|e| ReceiverError::Internal(format!("secure responder handshake: {e}")))?;
+    let (use_stream, first_bytes) = sniff_first_item(&conn).await?;
+    if !use_stream {
+        return Err(ReceiverError::Internal(
+            "secure lane must ride the reliable stream (lossless-only)".into(),
+        ));
+    }
+    run_lane_secure(&conn, first_bytes, profile, sink, session).await
+}
+
 /// Convenience for callers that own no endpoint (binds `addr` first).
 pub async fn listen_and_run(
     addr: SocketAddr,
