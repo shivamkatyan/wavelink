@@ -17,7 +17,7 @@
 # build-check.md for what is validated here vs Linux-runner/bt-lab gated.
 [package]
 name = "linux-receiver"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 license = "LicenseRef-Proprietary"
 rust-version = "1.98"

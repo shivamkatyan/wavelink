@@ -978,7 +978,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "macos-emitter"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "core-foundation",
  "coreaudio-sys",
@@ -2067,7 +2067,7 @@ dependencies = [
 
 [[package]]
 name = "wdr_codec"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "claxon",
  "flac-bound",
@@ -2079,7 +2079,7 @@ dependencies = [
 
 [[package]]
 name = "wdr_crypto"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "chacha20poly1305 0.11.0",
  "ed25519-dalek",
@@ -2092,7 +2092,7 @@ dependencies = [
 
 [[package]]
 name = "wdr_discovery"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "mdns-sd",
  "wdr_fakes",
@@ -2100,11 +2100,11 @@ dependencies = [
 
 [[package]]
 name = "wdr_entitlement"
-version = "0.0.2"
+version = "0.0.3"
 
 [[package]]
 name = "wdr_fakes"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "blake3",
  "rand_chacha",
@@ -2112,7 +2112,7 @@ dependencies = [
 
 [[package]]
 name = "wdr_proto"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "postcard",
  "serde",
@@ -2120,7 +2120,7 @@ dependencies = [
 
 [[package]]
 name = "wdr_refsim"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "blake3",
  "bytes",
@@ -2141,7 +2141,7 @@ dependencies = [
 
 [[package]]
 name = "wdr_transport"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "bytes",
  "quinn",

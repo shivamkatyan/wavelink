@@ -1,6 +1,6 @@
 # Wavelink — Build Status & Release Evidence (in-progress snapshot)
 
-Snapshot date: **2026-09-13 (0.0.1 genesis)** · Fresh single-commit history in the `wavelink` repo, carrying forward the previously verified state (245 tests / 0 fail after the 2026-09-13 ws1/ws2/ws3/ws5 batch; the v0.2.0 release of the retired `wireless-hifi-relay` repo is history) · **2026-09-14 update: ws-a…ws-h landed — workspace now 279 tests / 0 fail, android 35/0, secure lane, i24 e2e, drift estimator, uniffi bridge (host-proven), QR token, RT no_std+watchdog, host latency evidence** · Honest, evidence-backed state per Phase; no simulated claim passed off as physical.
+Snapshot date: **2026-09-13 (0.0.1 genesis)** · Fresh single-commit history in the `wavelink` repo, carrying forward the previously verified state (245 tests / 0 fail after the 2026-09-13 ws1/ws2/ws3/ws5 batch; the v0.2.0 release of the retired `wireless-hifi-relay` repo is history) · **2026-09-14 update: ws-a…ws-h landed — workspace now 279 tests / 0 fail, android 35/0, secure lane, i24 e2e, drift estimator, uniffi bridge (host-proven), QR token, RT no_std+watchdog, host latency evidence** · **2026-09-14 (v0.0.3) update: macOS emitter installer fixed + republished — `Wavelink.app` universal (arm64+x86_64) with the standard drag-to-Applications DMG layout and first-open Gatekeeper guidance (unsigned dev build); notarized signing remains the credentialed gate** · Honest, evidence-backed state per Phase; no simulated claim passed off as physical.
 
 ## Wavelink 0.0.1 snapshot (fresh genesis, combined-app era)
 

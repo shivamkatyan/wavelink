@@ -132,7 +132,9 @@ jobs:
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          # Both Darwin triples so scripts/package/macos.sh can lipo the
+          # UNIVERSAL (arm64 + x86_64) .app the standard-install DMG ships.
+          targets: aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Cargo cache
         uses: actions/cache@v4

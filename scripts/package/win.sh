@@ -49,6 +49,25 @@ if [ -f "$CRATE_DIR/README.md" ]; then
 else
     warn "crate README.md missing; skipping (package still valid)"
 fi
+cat > "$STAGE/INSTALL.txt" <<'INSTALL'
+How to install Wavelink (Windows)
+=================================
+
+1. Unzip this archive anywhere convenient (e.g. %ProgramFiles%\Wavelink) and
+   run wavelink.exe from a terminal (Command Prompt / PowerShell):
+
+       wavelink.exe --help
+       wavelink.exe --list-format     :: enumerate audio render endpoints
+
+2. Windows SmartScreen may warn "Windows protected your PC" because this EXE
+   is an unsigned developer build. Click "More info" then "Run anyway" — this
+   is expected for unsigned builds and is NOT a sign the file is malicious.
+
+Capture is system-wide only (WASAPI loopback; there is no per-process PCM API
+on Windows), and protected content is muted by the OS.
+
+Full instructions: docs/user/setup-and-install.md in the Wavelink repo.
+INSTALL
 
 ZIP="$OUT_DIR/wavelink-$REV.zip"
 rm -f "$ZIP"

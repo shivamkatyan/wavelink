@@ -2687,7 +2687,7 @@ dependencies = [
 
 [[package]]
 name = "wdr_bridge"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "uniffi",
  "wdr_crypto",
@@ -2699,7 +2699,7 @@ dependencies = [
 
 [[package]]
 name = "wdr_codec"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "claxon",
  "criterion",
@@ -2714,7 +2714,7 @@ dependencies = [
 
 [[package]]
 name = "wdr_crypto"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "chacha20poly1305 0.11.0",
  "ed25519-dalek",
@@ -2728,11 +2728,11 @@ dependencies = [
 
 [[package]]
 name = "wdr_dev"
-version = "0.0.2"
+version = "0.0.3"
 
 [[package]]
 name = "wdr_discovery"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "mdns-sd",
  "wdr_fakes",
@@ -2740,11 +2740,11 @@ dependencies = [
 
 [[package]]
 name = "wdr_entitlement"
-version = "0.0.2"
+version = "0.0.3"
 
 [[package]]
 name = "wdr_fakes"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "blake3",
  "rand_chacha",
@@ -2752,7 +2752,7 @@ dependencies = [
 
 [[package]]
 name = "wdr_proto"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "postcard",
  "proptest",
@@ -2761,7 +2761,7 @@ dependencies = [
 
 [[package]]
 name = "wdr_refsim"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "blake3",
  "bytes",
@@ -2782,19 +2782,19 @@ dependencies = [
 
 [[package]]
 name = "wdr_rt"
-version = "0.0.2"
+version = "0.0.3"
 
 [[package]]
 name = "wdr_session"
-version = "0.0.2"
+version = "0.0.3"
 
 [[package]]
 name = "wdr_telemetry"
-version = "0.0.2"
+version = "0.0.3"
 
 [[package]]
 name = "wdr_transport"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "bytes",
  "quinn",

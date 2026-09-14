@@ -35,7 +35,7 @@ for the non-native platforms.
 | Target | Script | Artifacts under `$WDR_DIST_DIR/…` |
 |---|---|---|
 | android | `scripts/package/android.sh` | `android/android-wavelink-debug.apk`, `android/android-wavelink-release-signed.apk` — **one combined Wavelink app** (roles picked in-app; the old split emitter/receiver APKs are not shipped), dev keystore at `android-keystore/` |
-| macos | `scripts/package/macos.sh` | `macos/macos-emitter.app` (ad-hoc signed), `macos/wavelink-<rev>.dmg` |
+| macos | `scripts/package/macos.sh` | `macos/Wavelink.app` (ad-hoc signed, **universal** arm64+x86_64), `macos/wavelink-<rev>.dmg` (standard drag-to-install layout: `Wavelink.app` + `Applications` alias + `How to install.txt`) |
 | linux | `scripts/package/linux.sh` | `linux/linux-emitter-<rev>.tar.gz`, `linux/linux-emitter_<ver>-<rev>_amd64.deb` (when `dpkg-deb` exists) |
 | windows | `scripts/package/win.sh` | `windows/win-emitter-<rev>.zip` |
 | ios | `scripts/package/ios.sh` | `ios/wavelink-ios-source-<rev>.tar.gz` (type-check gate report + build-check.md + README + RELEASE_AND_SIGNING.md) |
@@ -62,13 +62,21 @@ Every artifact ships a `LICENSE-NOTICES.txt` (from
   VCS.
 
 ### macOS
-- `cargo build --release --bin macos_emitter` in `platform/macos-emitter`,
-  assembled into `macos-emitter.app` (minimal `Info.plist`, `MacOS/`,
-  `Resources/`), `install_name_tool -add_rpath /usr/lib/swift` (the standard
-  Swift-runtime rpath Xcode emits), then `codesign --force --sign -` (ad-hoc —
-  no identity on this host/CI; production notarized signing is the documented
-  credential gate), then a read-only `hdiutil create -format UDZO` DMG. No
-  `create-dmg`; no GUI/attach workflows.
+- Builds the Rust engine (`macos_emitter`) for **both** `aarch64-apple-darwin`
+  and `x86_64-apple-darwin` and lipos them (and the AppKit GUI, compiled twice
+  with `swiftc -target <arch>-apple-macos13.0` + lipo) into one **universal**
+  `Wavelink.app` that runs on Apple Silicon and Intel Macs. Then
+  `codesign --force --sign -` (ad-hoc — no identity on this host/CI; production
+  notarized signing is the documented credential gate).
+- The read-only `hdiutil create -format UDZO` DMG uses the **standard
+  drag-to-install layout**: `Wavelink.app` + an `Applications` folder alias (a
+  symlink to `/Applications`) + `How to install.txt` (first-open Gatekeeper
+  bypass for the unsigned build) + LICENSE-NOTICES. No `create-dmg`; no
+  GUI/attach workflows.
+- Local DMG creation on a Mac whose DiskArbitration stack is wedged (2×
+  `diskimagesiod`, phantom mounts) can time out: `sudo killall -9 diskimagesiod
+  diskmanagementd` (the daemons respawn) or reboot, then re-run. CI runners are
+  not affected — the published DMG is built on the macos-26 runner.
 
 ### Linux
 - Native on a Linux runner (CI) or the `wdr-dev` dev container (`/workspace`):

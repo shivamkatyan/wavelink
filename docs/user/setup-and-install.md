@@ -41,19 +41,29 @@ output / USB DAC). You do not need to install two apps.
 
 ## macOS
 
-1. Mount `wavelink-<rev>.dmg` (double-click; it's read-only) and drag
-   `macos-emitter.app` to Applications (or run from anywhere). The app opens on
-   a role selector — **Emitter** is the shipped, streamable role; **Receiver**
-   is staged in the UI (it needs the macOS render path that is still a gate).
-2. First use: grant **Screen Recording** permission when macOS asks
+1. Mount `wavelink-<rev>.dmg` (double-click; it's read-only). Drag **Wavelink.app**
+   onto the **Applications** folder alias inside the window — the standard macOS
+   install (no manual copying). The app is a **universal** binary: one build that
+   runs on Apple Silicon and Intel Macs.
+2. Open `/Applications/Wavelink.app`. The app opens on a role selector —
+   **Emitter** is the shipped, streamable role; **Receiver** is staged in the UI
+   (it needs the macOS render path that is still a gate).
+3. Because this is a **developer, unsigned** build, macOS Gatekeeper quarantines
+   the downloaded app and refuses the first open ("can't be opened because Apple
+   cannot check it for malicious software"). That is **expected** for unsigned
+   developer builds — do one of:
+   - Right-click (Control-click) **Wavelink.app** in Finder → **Open** → **Open**
+     again in the dialog, or
+   - `xattr -dr com.apple.quarantine /Applications/Wavelink.app`
+4. First use: grant **Screen Recording** permission when macOS asks
    (System Settings → Privacy & Security → Screen Recording). The app explains
    why before the prompt. Without this grant the app still lists audio
    endpoints/hardware but cannot capture system audio.
-3. Because the DMG is a **developer, unsigned** build: first launch you may need
-   Control-click → Open, or `xattr -d com.apple.quarantine
-   /Applications/macos-emitter.app` to bypass Gatekeeper for this dev build.
-4. The CLI inside the app supports `--list-format` (audio endpoints/USB DAC),
-   `--permission-state`, and `--version`.
+5. The CLI inside the app supports `--list-format` (audio endpoints/USB DAC),
+   `--permission-state`, and `--version` (see Verify the install).
+
+> A real Developer ID + notarized release removes the Gatekeeper step entirely —
+> that is a credentials gate, tracked in `docs/planning/RELEASE_AND_SIGNING.md`.
 
 ## iOS
 
@@ -97,7 +107,7 @@ BT lab (`bt-lab` gate). See [Bluetooth](bluetooth.md).
 
 ## Verify the install
 
-- macOS: `macos-emitter.app/Contents/MacOS/macos-emitter --version`
+- macOS: `Wavelink.app/Contents/MacOS/macos-emitter --version`
 - Windows: `win_emitter.exe --version`
 - Linux: `linux-emitter --version`
 - Android: the app opens the role picker, and each role's activity shows the
