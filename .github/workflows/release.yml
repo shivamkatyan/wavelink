@@ -105,8 +105,7 @@ jobs:
             "$SDKM" --sdk_root="$ANDROID_HOME" "ndk;27.0.12077973"
             echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/27.0.12077973" >> "$GITHUB_ENV"
           else
-            echo "::warning::sdkmanager not found; cargoNdkBuild will skip and the\
- .so will be absent from the artifact (WdrEngineLoader tolerates it)."
+            echo "::warning::sdkmanager not found; cargoNdkBuild will skip and the .so will be absent from the artifact (WdrEngineLoader tolerates it)."
           fi
 
       - name: Package Android builds (assemble + sign)
