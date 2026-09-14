@@ -8,12 +8,16 @@
 #   Settings -> Pages -> Source: "GitHub Actions"
 # While Source is "Deploy from a branch", this workflow still builds fine but
 # the deploy job will not publish — flip the toggle to GitHub Actions.
+#
+# NOTE: branch pushes only (no `tags: ["v*"]`). The github-pages environment
+# protection rules reject tag refs ("Tag ... is not allowed to deploy"), and the
+# site is built from repo contents so a main push after a tag carries the same
+# content — a tag push additionally queuing a Pages deploy is pure noise.
 name: pages
 
 "on":
   push:
     branches: ["master", "main"]
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:

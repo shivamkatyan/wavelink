@@ -229,18 +229,26 @@ fn build_emitter(cfg: &Args) -> (StreamKind, BufferMeta, EmitterConfig) {
 
 /// Race the emit future against a quieted SIGTERM. `None` == the run was
 /// cut by the harness; the caller flushes partial counters and exits 0.
+///
+/// The SIGTERM cut is how the netem harness stops a run. That signal surface
+/// only exists on UNIX — on other platforms there is nothing to cut on, so the
+/// future simply runs to its natural end and `None` is never returned.
 async fn run_until_signal<F>(run: &mut F) -> Result<Option<blake3::Hash>, EmitterError>
 where
     F: core::future::Future<Output = Result<blake3::Hash, EmitterError>> + Unpin,
 {
-    let mut sig = std::pin::pin!(async {
+    #[cfg(unix)]
+    let mut cut = std::pin::pin!(async {
         let mut s = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("SIGTERM handler");
         s.recv().await;
     });
+    #[cfg(not(unix))]
+    let mut cut = std::pin::pin!(core::future::pending::<()>());
+
     tokio::select! {
         r = run => r.map(Some),
-        _ = &mut sig => Ok(None),
+        _ = &mut cut => Ok(None),
     }
 }
 
