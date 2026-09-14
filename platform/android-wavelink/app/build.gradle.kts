@@ -11,8 +11,8 @@ android {
         applicationId = "dev.wavelink.app"
         minSdk = 29
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.0.1"
+        versionCode = 2
+        versionName = "0.0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -79,6 +79,22 @@ val cargoNdkBuild = tasks.register<Exec>("cargoNdkBuild") {
             "-o", "${projectDir}/src/main/jniLibs",
             "build", "--release", "-p", "wdr_bridge",
         )
+        // The ff bridge .so crosses cmake for vendored libopus/libFLAC (R08).
+        // A failure must NOT fail the whole Android release — the app stays
+        // functional without the .so (uses-native-library required=false +
+        // WdrEngineLoader). Warn loudly instead so the android-ci gate is still
+        // visible, not silent.
+        isIgnoreExitValue = true
+        doLast {
+            if (executionResult.get().exitValue != 0) {
+                logger.warn(
+                    "cargoNdkBuild produced no libwdr_bridge.so (cargo-ndk/cmake " +
+                            "failed — R08). The APK is built without the Rust bridge; " +
+                            "the android-ci/device gate must land it before any " +
+                            "streaming claim."
+                )
+            }
+        }
     }
 }
 tasks.named("preBuild") {

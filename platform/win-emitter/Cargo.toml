@@ -7,7 +7,7 @@
 # `#[cfg(windows)]`-gated and validated on a Windows runner (see build-check.md).
 [package]
 name = "win-emitter"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 license = "LicenseRef-Proprietary"
 rust-version = "1.98"

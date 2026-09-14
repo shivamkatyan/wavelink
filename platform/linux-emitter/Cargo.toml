@@ -1,6 +1,6 @@
 [package]
 name = "linux-emitter"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 license = "LicenseRef-Proprietary"
 rust-version = "1.98"
